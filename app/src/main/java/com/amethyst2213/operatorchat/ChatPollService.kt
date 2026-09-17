@@ -12,12 +12,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Background poller that alerts the operator when any conversation needs a
- * reply. Uses the inbox endpoint (no chat id needed) and tracks a per-
- * conversation high-water mark to notify only on new member messages.
+ * Background notifier for the operator. Primary path: a Server-Sent Events
+ * stream (/webhooks/chat/events) pushes new member messages the moment they
+ * arrive, so notifications are near-instant. Fallback: a 10s inbox poller
+ * catches anything the stream missed. Both share a per-conversation
+ * high-water mark so nothing notifies twice.
  */
 class ChatPollService : Service() {
 
@@ -35,45 +38,92 @@ class ChatPollService : Service() {
         job?.cancel()
         if (url.isNotEmpty() && token.isNotEmpty()) {
             val bridge = ChatBridge(url, token)
+            val seen = mutableMapOf<Long, Long>() // conversation -> last seen member message id
             job = scope.launch {
-                // high-water mark per conversation: id -> last seen member message id
-                val seen = mutableMapOf<Long, Long>()
-                // First pass primes the high-water marks without notifying, so
-                // pre-existing unread messages don't trigger alerts on start.
-                var primed = false
-                while (true) {
-                    try {
-                        val convs = bridge.inbox()
-                        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
-                        val globalOn = prefs.getBoolean("notify_enabled", true)
-                        val defaultTone = prefs.getString("notify_tone", null)
-                        for (c in convs) {
-                            val chatKey = "chat_${c.id}"
-                            if (!prefs.getBoolean("${chatKey}_notify", true)) continue
-
-                            val msgs = bridge.thread(c.id)
-                            val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
-                            val last = seen[c.id] ?: 0L
-
-                            // Only notify for genuinely new member messages, and
-                            // only after the initial high-water mark is primed.
-                            if (globalOn && primed && newestMember > last && newestMember > 0) {
-                                val tone = prefs.getString("${chatKey}_tone", null) ?: defaultTone
-                                notifyNewMessage(c, tone)
-                            }
-                            if (newestMember > last || last == 0L) {
-                                seen[c.id] = newestMember
-                            }
-                        }
-                        primed = true
-                    } catch (_: Exception) {
-                        // transient; retry
-                    }
-                    delay(10000)
-                }
+                launch { eventsPump(bridge, seen) }   // primary: SSE push
+                launch { pollFallback(bridge, seen) } // fallback: 10s poll
             }
         }
         return START_STICKY
+    }
+
+    /** Primary: hold the SSE events stream open; notify as member messages arrive. */
+    private suspend fun eventsPump(bridge: ChatBridge, seen: MutableMap<Long, Long>) {
+        var since = 0L
+        var primed = false
+        while (scope.isActive) {
+            try {
+                val events = bridge.eventsOnce(since)
+                if (events.isNotEmpty()) {
+                    if (!primed) {
+                        // First batch just primes the high-water marks.
+                        events.forEach { seen[it.conversationId] = it.id }
+                        since = events.maxOf { it.id }
+                        primed = true
+                        continue
+                    }
+                    events.forEach { ev ->
+                        val last = seen[ev.conversationId] ?: 0L
+                        if (ev.id > last) {
+                            seen[ev.conversationId] = ev.id
+                            if (notifyEnabledFor(ev.conversationId)) {
+                                notifyNewEvent(ev)
+                                broadcastRefresh()
+                            }
+                        }
+                    }
+                    since = maxOf(since, events.maxOf { it.id })
+                }
+            } catch (_: Exception) {
+                // stream dropped/reconnect; the poller covers the gap
+                delay(3000)
+            }
+        }
+    }
+
+    /** Fallback: poll the inbox every 10s in case the stream was disconnected. */
+    private suspend fun pollFallback(bridge: ChatBridge, seen: MutableMap<Long, Long>) {
+        var primed = false
+        while (scope.isActive) {
+            try {
+                val convs = bridge.inbox()
+                for (c in convs) {
+                    if (!notifyEnabledFor(c.id)) continue
+                    val msgs = bridge.thread(c.id)
+                    val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
+                    val last = seen[c.id] ?: 0L
+                    if (primed && newestMember > last && newestMember > 0) {
+                        seen[c.id] = newestMember
+                        val tone = toneFor(c.id)
+                        notifyNewMessage(c, tone)
+                        broadcastRefresh()
+                    } else if (newestMember > last || last == 0L) {
+                        seen[c.id] = newestMember
+                    }
+                }
+                primed = true
+            } catch (_: Exception) {
+                // transient; retry
+            }
+            delay(10000)
+        }
+    }
+
+    private fun notifyEnabledFor(conversationId: Long): Boolean {
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        if (!prefs.getBoolean("notify_enabled", true)) return false
+        return prefs.getBoolean("chat_${conversationId}_notify", true)
+    }
+
+    private fun toneFor(conversationId: Long): String? {
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        return prefs.getString("chat_${conversationId}_tone", null)
+            ?: prefs.getString("notify_tone", null)
+    }
+
+    /** Tell MainActivity to refresh badges immediately. */
+    private fun broadcastRefresh() {
+        sendBroadcast(Intent(ACTION_CHAT_EVENT))
     }
 
     override fun onDestroy() {
@@ -104,6 +154,27 @@ class ChatPollService : Service() {
             if (Build.VERSION.SDK_INT >= 23) android.app.PendingIntent.FLAG_IMMUTABLE else 0)
     }
 
+    private fun notifyNewEvent(ev: ChatBridge.ChatEvent) {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID_NEW, "New member messages", NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
+        val name = ev.username.ifEmpty { "member" }
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID_NEW)
+            .setContentTitle("New message from $name")
+            .setContentText(ev.message.take(120))
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setAutoCancel(true)
+            .setContentIntent(openAppIntent())
+        val tone = toneFor(ev.conversationId)
+        if (tone != null) {
+            builder.setSound(android.net.Uri.parse(tone))
+        }
+        NotificationManagerCompat.from(this).notify((1000 + ev.conversationId).toInt(), builder.build())
+    }
+
     private fun notifyNewMessage(c: ChatBridge.Conversation, tone: String?) {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
@@ -128,5 +199,6 @@ class ChatPollService : Service() {
         private const val CHANNEL_ID = "operator_chat_foreground"
         private const val CHANNEL_ID_NEW = "operator_chat_new"
         private const val NOTIF_ID = 1001
+        const val ACTION_CHAT_EVENT = "com.amethyst2213.operatorchat.CHAT_EVENT"
     }
 }

@@ -1,7 +1,10 @@
 package com.amethyst2213.operatorchat
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -48,6 +51,15 @@ class MainActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
+    /** Refresh badges as soon as the poll service sees a new message (push). */
+    private val chatEventReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == ChatPollService.ACTION_CHAT_EVENT && bridge != null) {
+                loadInbox(showLoading = false)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -85,6 +97,8 @@ class MainActivity : AppCompatActivity() {
             setLoggedIn(true)
             loadInbox()
         }
+
+        registerReceiver(chatEventReceiver, IntentFilter(ChatPollService.ACTION_CHAT_EVENT))
     }
 
     override fun onResume() {
@@ -95,6 +109,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         stopRefreshLoop()
+        try { unregisterReceiver(chatEventReceiver) } catch (_: Exception) {}
         super.onDestroy()
     }
 

@@ -43,6 +43,15 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val updatedAt: String,
     )
 
+    data class ChatEvent(
+        val id: Long,
+        val conversationId: Long,
+        val userId: Long,
+        val username: String,
+        val message: String,
+        val createdAt: String,
+    )
+
     data class AppVersion(
         val latestVersion: String,
         val versionCode: Long,
@@ -176,6 +185,47 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                     val json = JSONObject(line.removePrefix("data: "))
                     val msgs = parseMessages(json.optJSONArray("messages"), conversationId)
                     if (msgs.isNotEmpty()) return@withContext msgs
+                } catch (_: Exception) {
+                    // ignore keepalive / partial
+                }
+            }
+            emptyList()
+        }
+    }
+
+    /**
+     * Server-Sent Events stream of new member messages across all
+     * conversations (used for push-style notifications). Returns as soon as
+     * the first batch of events arrives; callers loop for live updates.
+     */
+    suspend fun eventsOnce(since: Long): List<ChatEvent> = withContext(Dispatchers.IO) {
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/events?since=$since")
+            .header("Accept", "text/event-stream")
+            .get()
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
+            val reader = resp.body?.source() ?: return@withContext emptyList()
+            while (true) {
+                val line = reader.readUtf8Line() ?: break
+                if (!line.startsWith("data: ")) continue
+                try {
+                    val json = JSONObject(line.removePrefix("data: "))
+                    val arr = json.optJSONArray("events") ?: JSONArray()
+                    if (arr.length() == 0) continue
+                    val out = (0 until arr.length()).map { i ->
+                        val e = arr.getJSONObject(i)
+                        ChatEvent(
+                            id = e.optLong("id", 0),
+                            conversationId = e.optLong("conversation_id", 0),
+                            userId = e.optLong("user_id", 0),
+                            username = e.optString("username", ""),
+                            message = e.optString("message", ""),
+                            createdAt = e.optString("created_at", ""),
+                        )
+                    }
+                    return@withContext out
                 } catch (_: Exception) {
                     // ignore keepalive / partial
                 }
