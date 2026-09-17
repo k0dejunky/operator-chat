@@ -226,7 +226,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      * Returns the file, or null on failure.
      */
     suspend fun download(attachmentUrl: String, dest: File): File? = withContext(Dispatchers.IO) {
-        val req = authed().url("$baseUrl$attachmentUrl").get().build()
+        val req = authed().url(resolveUrl(attachmentUrl)).get().build()
         try {
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
@@ -256,6 +256,24 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         } catch (_: Exception) {
             null
         }
+    }
+
+    /**
+     * Resolve a site-relative path (e.g. "/gallery/webhooks/chat/attachment?message=58")
+     * against the configured base URL, avoiding a duplicated base path. The
+     * base URL is "https://host/gallery" and the server hands back paths that
+     * already include the /gallery prefix, so we derive scheme+host from the
+     * base and append the path as-is.
+     */
+    private fun resolveUrl(path: String): String {
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            return path
+        }
+        val base = baseUrl.trimEnd('/')
+        val slash = base.indexOf('/', base.indexOf("://") + 3)
+        val origin = if (slash > 0) base.substring(0, slash) else base
+        val joined = if (path.startsWith("/")) path else "/" + path
+        return origin + joined
     }
 
     private fun parseMessages(arr: JSONArray?, conversationId: Long): List<Message> {
