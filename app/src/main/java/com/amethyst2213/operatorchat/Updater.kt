@@ -21,10 +21,10 @@ object Updater {
         val scope = CoroutineScope(Dispatchers.Main)
         scope.launch {
             status?.text = "Downloading v${v.latestVersion}…"
-            val apkUrl = if (v.apkUrl.startsWith("http")) v.apkUrl else baseUrl + v.apkUrl
+            val bridge = ChatBridge(baseUrl, "")
+            val apkUrl = if (v.apkUrl.startsWith("http")) v.apkUrl else bridge.resolveUrl(v.apkUrl)
             val dest = File(context.getExternalFilesDir(null) ?: context.filesDir, "OperatorChat-${v.latestVersion}.apk")
             val file = withContext(Dispatchers.IO) {
-                val bridge = ChatBridge(baseUrl, "")
                 bridge.downloadFile(apkUrl, dest)
             }
             if (file == null) {

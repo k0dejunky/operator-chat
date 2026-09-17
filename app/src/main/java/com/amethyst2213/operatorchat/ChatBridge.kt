@@ -315,7 +315,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      * already include the /gallery prefix, so we derive scheme+host from the
      * base and append the path as-is.
      */
-    private fun resolveUrl(path: String): String {
+    fun resolveUrl(path: String): String {
         if (path.startsWith("http://") || path.startsWith("https://")) {
             return path
         }
