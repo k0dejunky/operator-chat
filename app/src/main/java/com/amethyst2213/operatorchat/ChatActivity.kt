@@ -10,6 +10,8 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -35,6 +37,7 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var emojiBar: RecyclerView
     private lateinit var titleLabel: TextView
     private lateinit var statusLabel: TextView
+    private lateinit var root: View
 
     private var bridge: ChatBridge? = null
     private var conversationId: Long = 0
@@ -67,6 +70,17 @@ class ChatActivity : AppCompatActivity() {
         val url = intent.getStringExtra("base_url") ?: ""
         val token = intent.getStringExtra("token") ?: ""
         titleLabel.text = "Chat with ${intent.getStringExtra("user_email") ?: "#$conversationId"}"
+
+        // Keep the bottom reply bar above the soft keyboard (edge-to-edge on
+        // targetSdk 35 means adjustResize alone is not enough).
+        root = findViewById(R.id.chat_root)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
+            root.setPadding(0, 0, 0, ime + bars)
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
 
         bridge = ChatBridge(url, token)
 
