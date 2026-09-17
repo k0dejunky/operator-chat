@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FDF2F8">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Operator Chat"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:textColor="#4A044E" />
+
+        <TextView
+            android:id="@+id/status_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Enter server URL + token, then Connect."
+            android:textSize="13sp"
+            android:textColor="#6B21A8" />
+
+        <EditText
+            android:id="@+id/url_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:hint="Server URL (e.g. https://amethyst2213.com/gallery)"
+            android:inputType="textUri"
+            android:background="@drawable/input_bg" />
+
+        <EditText
+            android:id="@+id/token_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="Bridge token (GALLERY_CHAT_KEY)"
+            android:inputType="textPassword"
+            android:background="@drawable/input_bg" />
+
+        <EditText
+            android:id="@+id/conv_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="Conversation ID"
+            android:inputType="number"
+            android:background="@drawable/input_bg" />
+
+        <Button
+            android:id="@+id/connect_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Connect & start polling" />
+
+        <TextView
+            android:id="@+id/mode_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Mode: —"
+            android:textColor="#4A044E" />
+
+        <TextView
+            android:id="@+id/pending_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Pending: —"
+            android:textColor="#4A044E" />
+
+        <TextView
+            android:id="@+id/messages_label"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Member messages will appear here."
+            android:textColor="#4A044E" />
+
+        <EditText
+            android:id="@+id/reply_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:hint="Type the operator reply…"
+            android:minLines="3"
+            android:gravity="top"
+            android:background="@drawable/input_bg" />
+
+        <Button
+            android:id="@+id/reply_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Send operator reply" />
+    </LinearLayout>
+</ScrollView>
