@@ -100,7 +100,7 @@ class ChatActivity : AppCompatActivity() {
         }
 
         attachButton.setOnClickListener {
-            pickAttachment.launch("image/*|video/*|text/plain|application/pdf")
+            pickAttachment.launch("*/*")
         }
 
         sendButton.setOnClickListener { sendReply() }
