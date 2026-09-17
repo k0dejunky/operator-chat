@@ -182,14 +182,40 @@ class MainActivity : AppCompatActivity() {
         statusLabel.text = "Loading thread…"
         pollJob?.cancel()
         pollJob = lifecycleScope.launch {
+            // Initial full load, then stream for realtime updates.
+            try {
+                loadThreadOnce()
+            } catch (e: Exception) {
+                statusLabel.text = "Thread error: ${e.message ?: "connection"} — retrying…"
+            }
             while (true) {
                 try {
-                    loadThreadOnce()
+                    streamThread()
                 } catch (e: Exception) {
-                    statusLabel.text = "Thread error: ${e.message ?: "connection"} — retrying…"
+                    statusLabel.text = "Stream error: ${e.message ?: "connection"} — reconnecting…"
+                    delay(1500)
                 }
-                delay(4000)
             }
+        }
+    }
+
+    /** Realtime: block on the SSE stream and render new messages as they arrive. */
+    private suspend fun streamThread() {
+        val b = bridge ?: return
+        val msgs = b.streamOnce(currentConv, lastMessageId)
+        if (msgs.isNotEmpty()) {
+            val sv = rootScroll
+            val atBottom = sv.getChildAt(0)?.let { root ->
+                root.bottom - (sv.scrollY + sv.height) < 60
+            } ?: true
+            msgs.forEach { m ->
+                if (m.id > lastMessageId) appendMessage(m)
+                if (m.id > lastMessageId) lastMessageId = m.id
+            }
+            if (atBottom) {
+                sv.post { sv.fullScroll(View.FOCUS_DOWN) }
+            }
+            statusLabel.text = "Live"
         }
     }
 

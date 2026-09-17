@@ -103,4 +103,48 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             JSONObject(body).optBoolean("ok", false)
         }
     }
+
+    /**
+     * Server-Sent Events stream for real-time updates. Holds the connection
+     * open (up to the server's ~30s window) and returns any new messages that
+     * arrive; callers loop this for continuous live updates.
+     *
+     * @return the messages received during this stream window (may be empty).
+     */
+    fun streamOnce(conversationId: Long, since: Long): List<Message> {
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/stream?conversation=$conversationId&since=$since")
+            .header("Accept", "text/event-stream")
+            .get()
+            .build()
+        val out = mutableListOf<Message>()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
+            val body = resp.body ?: return emptyList()
+            val reader = body.source()
+            while (true) {
+                val line = reader.readUtf8Line() ?: break
+                if (!line.startsWith("data: ")) continue
+                try {
+                    val json = JSONObject(line.removePrefix("data: "))
+                    val arr = json.optJSONArray("messages") ?: JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val m = arr.getJSONObject(i)
+                        out.add(
+                            Message(
+                                id = m.optLong("id", 0),
+                                conversationId = m.optLong("conversation_id", conversationId),
+                                senderRole = m.optString("sender_role", "user"),
+                                message = m.optString("message", ""),
+                                createdAt = m.optString("created_at", ""),
+                            )
+                        )
+                    }
+                } catch (_: Exception) {
+                    // ignore malformed keepalive/partial lines
+                }
+            }
+        }
+        return out
+    }
 }
