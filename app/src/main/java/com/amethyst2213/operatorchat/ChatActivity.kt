@@ -214,8 +214,8 @@ class ChatActivity : AppCompatActivity() {
                 else -> "AI"
             }
             h.bubble.text = m.message.ifEmpty { "" }
-            h.bubble.setBackgroundColor(if (mine) 0xFF9333EA.toInt() else 0xFFFDF2F8.toInt())
-            h.bubble.setTextColor(if (mine) 0xFFFFFFFF.toInt() else 0xFF4A044E.toInt())
+            h.bubble.setBackgroundResource(if (mine) R.drawable.bubble_out else R.drawable.bubble_in)
+            h.bubble.setTextColor(if (mine) 0xFFFFFFFF.toInt() else 0xFF2E1065.toInt())
 
             // Member/AI messages hug the left; operator messages hug the right.
             val gravity = if (mine) android.view.Gravity.END else android.view.Gravity.START

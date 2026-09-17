@@ -3,15 +3,17 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:layout_marginBottom="6dp">
+    android:layout_marginBottom="4dp"
+    android:paddingLeft="10dp"
+    android:paddingRight="10dp">
 
     <TextView
         android:id="@+id/sender_label"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="2dp"
+        android:layout_marginBottom="3dp"
         android:textSize="11sp"
-        android:textColor="#9333EA" />
+        android:textColor="#A78BFA" />
 
     <LinearLayout
         android:id="@+id/bubble_row"
@@ -23,9 +25,13 @@
             android:id="@+id/bubble"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:padding="12dp"
+            android:maxWidth="320dp"
+            android:paddingLeft="14dp"
+            android:paddingTop="10dp"
+            android:paddingRight="14dp"
+            android:paddingBottom="10dp"
             android:textSize="15sp"
-            android:background="@drawable/input_bg" />
+            android:lineSpacingExtra="2dp" />
 
         <TextView
             android:id="@+id/attach_label"
@@ -34,6 +40,7 @@
             android:layout_marginLeft="8dp"
             android:padding="6dp"
             android:textSize="13sp"
+            android:textColor="#6D28D9"
             android:gravity="center_vertical"
             android:visibility="gone" />
     </LinearLayout>
