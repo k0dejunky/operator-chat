@@ -18,20 +18,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.launch
 
 /**
- * Login + users list. Shows only users with unread member messages (a badge
- * with the count), and provides the app navigation menu.
+ * Login + users list. Stays logged in across restarts; the login form is
+ * hidden once connected. Shows only users with unread member messages.
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var urlInput: EditText
     private lateinit var tokenInput: EditText
     private lateinit var connectButton: Button
+    private lateinit var loginContainer: LinearLayout
     private lateinit var statusLabel: TextView
     private lateinit var inboxRecycler: RecyclerView
     private lateinit var emptyLabel: TextView
@@ -51,9 +54,18 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         supportActionBar?.setTitle("Users list")
 
+        // Keep the toolbar below the OS status bar (edge-to-edge).
+        ViewCompat.setOnApplyWindowInsetsListener(toolbar) { v, insets ->
+            val top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            v.setPadding(0, top, 0, 0)
+            insets
+        }
+        ViewCompat.requestApplyInsets(toolbar)
+
         urlInput = findViewById(R.id.url_input)
         tokenInput = findViewById(R.id.token_input)
         connectButton = findViewById(R.id.connect_button)
+        loginContainer = findViewById(R.id.login_container)
         statusLabel = findViewById(R.id.status_label)
         inboxRecycler = findViewById(R.id.inbox_recycler)
         emptyLabel = findViewById(R.id.empty_label)
@@ -62,14 +74,30 @@ class MainActivity : AppCompatActivity() {
         inboxRecycler.layoutManager = LinearLayoutManager(this)
         inboxRecycler.adapter = InboxAdapter(conversations) { openChat(it) }
 
-        urlInput.setText(prefs.getString("url", "https://amethyst2213.com/gallery"))
-        tokenInput.setText(prefs.getString("token", ""))
-
         connectButton.setOnClickListener { connect() }
 
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // Stay logged in: restore saved credentials and skip the login form.
+        val savedUrl = prefs.getString("url", "") ?: ""
+        val savedToken = prefs.getString("token", "") ?: ""
+        if (savedUrl.isNotEmpty() && savedToken.isNotEmpty()) {
+            urlInput.setText(savedUrl)
+            tokenInput.setText(savedToken)
+            bridge = ChatBridge(savedUrl, savedToken)
+            setLoggedIn(true)
+            loadInbox()
+        }
+    }
+
+    /** Show/hide the login form based on logged-in state. */
+    private fun setLoggedIn(loggedIn: Boolean) {
+        loginContainer.visibility = if (loggedIn) View.GONE else View.VISIBLE
+        if (loggedIn) {
+            statusLabel.text = "Loading users…"
         }
     }
 
@@ -93,8 +121,12 @@ class MainActivity : AppCompatActivity() {
                 bridge = null
                 conversations.clear()
                 inboxRecycler.adapter?.notifyDataSetChanged()
-                emptyLabel.visibility = View.VISIBLE
+                emptyLabel.visibility = View.GONE
+                setLoggedIn(false)
                 statusLabel.text = "Logged out — enter server URL + token."
+                try {
+                    stopService(Intent(this, ChatPollService::class.java))
+                } catch (_: Exception) {}
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -140,6 +172,7 @@ class MainActivity : AppCompatActivity() {
         }
         prefs.edit().putString("url", url).putString("token", token).apply()
         bridge = ChatBridge(url, token)
+        setLoggedIn(true)
         loadInbox()
     }
 

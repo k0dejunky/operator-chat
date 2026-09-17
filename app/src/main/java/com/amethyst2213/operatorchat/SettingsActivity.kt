@@ -11,6 +11,8 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
@@ -34,6 +36,14 @@ class SettingsActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         supportActionBar?.setTitle("Settings")
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
+
+        // Keep the toolbar below the OS status bar (edge-to-edge).
+        ViewCompat.setOnApplyWindowInsetsListener(toolbar) { v, insets ->
+            val top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
+            v.setPadding(0, top, 0, 0)
+            insets
+        }
+        ViewCompat.requestApplyInsets(toolbar)
 
         baseUrl = intent.getStringExtra("base_url") ?: ""
 
