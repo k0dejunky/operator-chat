@@ -4,8 +4,11 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -20,18 +23,26 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var urlInput: EditText
     private lateinit var tokenInput: EditText
-    private lateinit var convInput: EditText
-    private lateinit var modeLabel: TextView
-    private lateinit var pendingLabel: TextView
+    private lateinit var connectButton: Button
     private lateinit var statusLabel: TextView
-    private lateinit var messagesLabel: TextView
+
+    // Inbox view
+    private lateinit var inboxLayout: LinearLayout
+    private lateinit var refreshButton: Button
+
+    // Thread view
+    private lateinit var threadLayout: LinearLayout
+    private lateinit var threadTitle: TextView
+    private lateinit var backButton: Button
     private lateinit var replyInput: EditText
     private lateinit var replyButton: Button
-    private lateinit var connectButton: Button
+
+    private lateinit var rootScroll: ScrollView
 
     private var bridge: ChatBridge? = null
     private var pollJob: Job? = null
-    private var lastMemberIds = mutableSetOf<Long>()
+    private var currentConv: Long = 0
+    private var lastMessageId = 0L
 
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
 
@@ -43,21 +54,23 @@ class MainActivity : AppCompatActivity() {
 
         urlInput = findViewById(R.id.url_input)
         tokenInput = findViewById(R.id.token_input)
-        convInput = findViewById(R.id.conv_input)
-        modeLabel = findViewById(R.id.mode_label)
-        pendingLabel = findViewById(R.id.pending_label)
+        connectButton = findViewById(R.id.connect_button)
         statusLabel = findViewById(R.id.status_label)
-        messagesLabel = findViewById(R.id.messages_label)
+        inboxLayout = findViewById(R.id.inbox_layout)
+        refreshButton = findViewById(R.id.refresh_button)
+        threadLayout = findViewById(R.id.thread_layout)
+        threadTitle = findViewById(R.id.thread_title)
+        backButton = findViewById(R.id.back_button)
         replyInput = findViewById(R.id.reply_input)
         replyButton = findViewById(R.id.reply_button)
-        connectButton = findViewById(R.id.connect_button)
+        rootScroll = findViewById(R.id.root_scroll)
 
         urlInput.setText(prefs.getString("url", "https://amethyst2213.com/gallery"))
         tokenInput.setText(prefs.getString("token", ""))
-        val savedConv = prefs.getLong("conversation", 0)
-        convInput.setText(if (savedConv > 0) savedConv.toString() else "")
 
         connectButton.setOnClickListener { connect() }
+        refreshButton.setOnClickListener { loadInbox() }
+        backButton.setOnClickListener { showInbox() }
         replyButton.setOnClickListener { sendReply() }
 
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -80,67 +93,151 @@ class MainActivity : AppCompatActivity() {
         }
         prefs.edit().putString("url", url).putString("token", token).apply()
         bridge = ChatBridge(url, token)
-        startPolling()
+        // Start the background poller for new-message notifications.
+        val si = android.content.Intent(this, ChatPollService::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(si)
+        } else {
+            startService(si)
+        }
+        statusLabel.text = "Connected — loading inbox…"
+        loadInbox()
     }
 
-    private fun startPolling() {
+    private fun showInbox() {
         pollJob?.cancel()
-        statusLabel.text = "Connected — polling…"
-        pollJob = lifecycleScope.launch {
-            while (true) {
-                try {
-                    pollOnce()
-                } catch (e: Exception) {
-                    statusLabel.text = "Error: ${e.message ?: "network"} — retrying…"
+        currentConv = 0
+        inboxLayout.visibility = View.VISIBLE
+        threadLayout.visibility = View.GONE
+    }
+
+    private fun loadInbox() {
+        val b = bridge ?: run { statusLabel.text = "Connect first."; return }
+        inboxLayout.removeAllViews()
+        statusLabel.text = "Loading inbox…"
+        lifecycleScope.launch {
+            try {
+                val convs = b.inbox()
+                if (convs.isEmpty()) {
+                    val empty = TextView(this@MainActivity).apply {
+                        text = "No conversations yet."
+                        setPadding(16, 16, 16, 16)
+                    }
+                    inboxLayout.addView(empty)
+                } else {
+                    convs.forEach { c -> inboxLayout.addView(buildRow(c)) }
                 }
-                delay(5000)
+                statusLabel.text = "${convs.size} conversation(s)"
+            } catch (e: Exception) {
+                statusLabel.text = "Error: ${e.message ?: "connection failed"} — check URL/token and try again."
             }
         }
     }
 
-    private suspend fun pollOnce() {
+    private fun buildRow(c: ChatBridge.Conversation): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(16, 12, 16, 12)
+            setBackgroundColor(0xFFFDF2F8.toInt())
+            isClickable = true
+            setOnClickListener { openThread(c.id, c.userEmail) }
+        }
+        val title = TextView(this).apply {
+            text = c.userEmail.ifEmpty { "Conversation #${c.id}" }
+            setTextColor(0xFF4A044E.toInt())
+            textSize = 15f
+            setTypeface(android.graphics.Typeface.DEFAULT_BOLD)
+        }
+        val last = TextView(this).apply {
+            text = (if (c.lastSender == "user") "Member: " else "") + (c.lastMessage.take(80).ifEmpty { "(no messages)" })
+            setTextColor(0xFF6B21A8.toInt())
+            textSize = 13f
+            maxLines = 1
+        }
+        val meta = TextView(this).apply {
+            val unread = c.unreadReplyable
+            text = "${c.memberCount} member msg(s)" + (if (unread > 0) " · $unread need reply" else "") + " · mode ${c.aiMode}"
+            setTextColor(0xFF9333EA.toInt())
+            textSize = 11f
+        }
+        row.addView(title)
+        row.addView(last)
+        row.addView(meta)
+        return row
+    }
+
+    private fun openThread(convId: Long, email: String) {
+        currentConv = convId
+        lastMessageId = 0L
+        threadTitle.text = "Chat with $email"
+        threadLayout.visibility = View.VISIBLE
+        inboxLayout.visibility = View.GONE
+        statusLabel.text = "Loading thread…"
+        pollJob?.cancel()
+        pollJob = lifecycleScope.launch {
+            while (true) {
+                try {
+                    loadThreadOnce()
+                } catch (e: Exception) {
+                    statusLabel.text = "Thread error: ${e.message ?: "connection"} — retrying…"
+                }
+                delay(4000)
+            }
+        }
+    }
+
+    private suspend fun loadThreadOnce() {
         val b = bridge ?: return
-        val cid = convInput.text.toString().trim().toLongOrNull() ?: run {
-            statusLabel.text = "Enter a conversation id."
+        val msgs = b.thread(currentConv)
+        if (msgs.isEmpty()) {
+            statusLabel.text = "No messages in this thread."
             return
         }
-        prefs.edit().putLong("conversation", cid).apply()
-
-        val cfg = b.config(cid)
-        modeLabel.text = "Mode: ${cfg.aiMode} · Status: ${cfg.status}"
-        pendingLabel.text = "Pending: ${cfg.pending}"
-
-        val msgs = b.pending(cid)
-        val newOnes = msgs.filter { m ->
-            m.senderRole == "user" && m.id !in lastMemberIds
-        }
+        val newOnes = msgs.filter { it.id > lastMessageId }
         if (newOnes.isNotEmpty()) {
-            val sb = StringBuilder(messagesLabel.text)
-            newOnes.forEach { sb.append("\n\n").append("Member #").append(it.id).append(":\n").append(it.message) }
-            messagesLabel.text = sb.toString()
-            lastMemberIds.addAll(newOnes.map { it.id })
-            statusLabel.text = "${newOnes.size} new member message(s)"
-        } else {
-            statusLabel.text = "No new messages"
+            val sv = rootScroll
+            val atBottom = sv.getChildAt(0)?.let { root ->
+                root.bottom - (sv.scrollY + sv.height) < 60
+            } ?: true
+            newOnes.forEach { appendMessage(it) }
+            if (atBottom) {
+                sv.post { sv.fullScroll(View.FOCUS_DOWN) }
+            }
+            lastMessageId = msgs.maxOf { it.id }
+            statusLabel.text = "Live"
         }
+    }
+
+    private fun appendMessage(m: ChatBridge.Message) {
+        val bubble = TextView(this).apply {
+            text = when (m.senderRole) {
+                "user" -> "Member:\n${m.message}"
+                "operator" -> "You:\n${m.message}"
+                else -> "AI:\n${m.message}"
+            }
+            textSize = 14f
+            setPadding(12, 10, 12, 10)
+        }
+        if (m.senderRole == "user") {
+            bubble.setBackgroundColor(0xFFFDF2F8.toInt())
+            bubble.setTextColor(0xFF4A044E.toInt())
+        } else {
+            bubble.setBackgroundColor(0xFF9333EA.toInt())
+            bubble.setTextColor(0xFFFFFFFF.toInt())
+        }
+        threadLayout.addView(bubble)
     }
 
     private fun sendReply() {
         val b = bridge ?: return
-        val cid = convInput.text.toString().trim().toLongOrNull() ?: run {
-            Snackbar.make(findViewById(android.R.id.content), "Enter a conversation id first.", Snackbar.LENGTH_LONG).show()
-            return
-        }
         val text = replyInput.text.toString().trim()
         if (text.isEmpty()) return
         replyInput.setText("")
         lifecycleScope.launch {
             try {
-                val ok = b.reply(cid, text)
+                val ok = b.reply(currentConv, text)
                 statusLabel.text = if (ok) "Reply sent" else "Reply failed"
-                if (ok) {
-                    messagesLabel.append("\n\nYou:\n$text")
-                }
+                if (ok) loadThreadOnce()
             } catch (e: Exception) {
                 statusLabel.text = "Send error: ${e.message}"
             }

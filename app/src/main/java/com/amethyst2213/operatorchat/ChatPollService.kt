@@ -15,9 +15,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * Background poller that alerts the operator when new member messages arrive
- * in Live/operator mode. Started by MainActivity; shows a persistent
- * notification while running.
+ * Background poller that alerts the operator when any conversation needs a
+ * reply. Uses the inbox endpoint (no chat id needed) and tracks a per-
+ * conversation high-water mark to notify only on new member messages.
  */
 class ChatPollService : Service() {
 
@@ -31,24 +31,36 @@ class ChatPollService : Service() {
         val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
         val url = prefs.getString("url", "")?.trim()?.trimEnd('/') ?: ""
         val token = prefs.getString("token", "")?.trim() ?: ""
-        val cid = prefs.getLong("conversation", 0)
 
         job?.cancel()
-        if (url.isNotEmpty() && token.isNotEmpty() && cid > 0) {
+        if (url.isNotEmpty() && token.isNotEmpty()) {
             val bridge = ChatBridge(url, token)
             job = scope.launch {
-                var seen = bridge.pending(cid).map { it.id }.toSet()
+                // high-water mark per conversation: id -> last seen member message id
+                val seen = mutableMapOf<Long, Long>()
                 while (true) {
                     try {
-                        val msgs = bridge.pending(cid).filter { it.id !in seen }
-                        if (msgs.isNotEmpty()) {
-                            seen = seen + msgs.map { it.id }
-                            notifyNewMessages(msgs.size)
+                        val convs = bridge.inbox()
+                        var newTotal = 0
+                        for (c in convs) {
+                            // refresh the thread to learn the newest member message id
+                            val msgs = bridge.thread(c.id)
+                            val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
+                            val last = seen[c.id] ?: 0L
+                            if (newestMember > last) {
+                                newTotal += 1
+                            }
+                            if (newestMember > last || last == 0L) {
+                                seen[c.id] = newestMember
+                            }
+                        }
+                        if (newTotal > 0) {
+                            notifyNewMessages(newTotal)
                         }
                     } catch (_: Exception) {
                         // transient; retry
                     }
-                    delay(8000)
+                    delay(10000)
                 }
             }
         }
@@ -84,7 +96,7 @@ class ChatPollService : Service() {
         }
         val n = NotificationCompat.Builder(this, CHANNEL_ID_NEW)
             .setContentTitle("New chat message")
-            .setContentText("$count new member message(s) awaiting reply")
+            .setContentText("$count conversation(s) have a new member message")
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setAutoCancel(true)
             .build()
