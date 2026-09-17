@@ -98,7 +98,8 @@ class MainActivity : AppCompatActivity() {
             loadInbox()
         }
 
-        registerReceiver(chatEventReceiver, IntentFilter(ChatPollService.ACTION_CHAT_EVENT))
+        ContextCompat.registerReceiver(this, chatEventReceiver,
+            IntentFilter(ChatPollService.ACTION_CHAT_EVENT), ContextCompat.RECEIVER_NOT_EXPORTED)
     }
 
     override fun onResume() {
