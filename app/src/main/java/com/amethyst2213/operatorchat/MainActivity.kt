@@ -10,7 +10,6 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Job
@@ -55,7 +54,8 @@ class MainActivity : AppCompatActivity() {
 
         urlInput.setText(prefs.getString("url", "https://amethyst2213.com/gallery"))
         tokenInput.setText(prefs.getString("token", ""))
-        convInput.setText(prefs.getLong("conversation", 0).toString().ifEmpty { "" })
+        val savedConv = prefs.getLong("conversation", 0)
+        convInput.setText(if (savedConv > 0) savedConv.toString() else "")
 
         connectButton.setOnClickListener { connect() }
         replyButton.setOnClickListener { sendReply() }
