@@ -181,6 +181,7 @@ class ChatActivity : AppCompatActivity() {
             val sender: TextView = v.findViewById(R.id.sender_label)
             val attach: TextView = v.findViewById(R.id.attach_label)
             val image: android.widget.ImageView = v.findViewById(R.id.attach_image)
+            val row: android.widget.LinearLayout = v.findViewById(R.id.bubble_row)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -202,10 +203,23 @@ class ChatActivity : AppCompatActivity() {
             h.bubble.setBackgroundColor(if (mine) 0xFF9333EA.toInt() else 0xFFFDF2F8.toInt())
             h.bubble.setTextColor(if (mine) 0xFFFFFFFF.toInt() else 0xFF4A044E.toInt())
 
+            // Member/AI messages hug the left; operator messages hug the right.
+            val gravity = if (mine) android.view.Gravity.END else android.view.Gravity.START
+            h.row.gravity = gravity
+            (h.sender.layoutParams as? android.widget.LinearLayout.LayoutParams)?.let { lp ->
+                lp.leftMargin = if (mine) 0 else 12
+                lp.rightMargin = if (mine) 12 else 0
+            }
+
             // Reset image slot each bind.
             h.image.setImageDrawable(null)
             h.image.visibility = View.GONE
             h.image.setOnClickListener(null)
+            h.image.layoutParams = h.image.layoutParams.also { lp ->
+                if (lp is android.widget.LinearLayout.LayoutParams) {
+                    lp.gravity = gravity
+                }
+            }
 
             if (m.attachmentName != null) {
                 if (m.attachmentThumbUrl != null) {
