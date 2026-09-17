@@ -18,8 +18,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -54,13 +52,7 @@ class MainActivity : AppCompatActivity() {
         val toolbar = findViewById<Toolbar>(R.id.toolbar)
         setSupportActionBar(toolbar)
         supportActionBar?.setTitle("Users list")
-
-        ViewCompat.setOnApplyWindowInsetsListener(toolbar) { v, insets ->
-            val top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
-            v.setPadding(0, top, 0, 0)
-            insets
-        }
-        ViewCompat.requestApplyInsets(toolbar)
+        StatusBarToolbar.apply(this, toolbar)
 
         urlInput = findViewById(R.id.url_input)
         tokenInput = findViewById(R.id.token_input)

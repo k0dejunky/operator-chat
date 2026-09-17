@@ -72,14 +72,7 @@ class ChatActivity : AppCompatActivity() {
         val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.chat_toolbar)
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
-
-        // Keep the toolbar below the OS status bar (edge-to-edge).
-        ViewCompat.setOnApplyWindowInsetsListener(toolbar) { v, insets ->
-            val top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
-            v.setPadding(0, top, 0, 0)
-            insets
-        }
-        ViewCompat.requestApplyInsets(toolbar)
+        StatusBarToolbar.apply(this, toolbar)
 
         conversationId = intent.getLongExtra("conversation_id", 0)
         val url = intent.getStringExtra("base_url") ?: ""
