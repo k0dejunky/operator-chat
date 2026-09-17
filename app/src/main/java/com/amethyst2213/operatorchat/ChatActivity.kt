@@ -159,8 +159,10 @@ class ChatActivity : AppCompatActivity() {
         val chatKey = "chat_$conversationId"
         val notifyOn = prefs.getBoolean("${chatKey}_notify", true)
         val tone = prefs.getString("${chatKey}_tone", "").orEmpty()
+        val isFav = Favorites.isFavorite(this, conversationId)
 
         val options = arrayOf(
+            "★ Favourite: ${if (isFav) "ON" else "OFF"}",
             "Chat mode: ${labels[checked]}",
             "Notifications: ${if (notifyOn) "ON" else "OFF"}",
             "Notification tone: ${if (tone.isEmpty()) "Default" else tone.substringAfterLast('/')}"
@@ -169,13 +171,17 @@ class ChatActivity : AppCompatActivity() {
             .setTitle("Chat settings")
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> pickMode(modes, labels, checked, b)
-                    1 -> {
+                    0 -> {
+                        Favorites.toggle(this, conversationId)
+                        showChatSettings()
+                    }
+                    1 -> pickMode(modes, labels, checked, b)
+                    2 -> {
                         val on = !notifyOn
                         prefs.edit().putBoolean("${chatKey}_notify", on).apply()
                         showChatSettings()
                     }
-                    2 -> pickChatTone(chatKey)
+                    3 -> pickChatTone(chatKey)
                 }
             }
             .setPositiveButton("Done", null)
@@ -234,6 +240,8 @@ class ChatActivity : AppCompatActivity() {
                 latestId = hist.maxOfOrNull { it.id } ?: 0L
                 adapter.notifyDataSetChanged()
                 statusLabel.text = "Live"
+                // Reading the thread clears its new-message state.
+                try { bridge?.setRead(conversationId, latestId) } catch (_: Exception) {}
             } catch (e: Exception) {
                 statusLabel.text = "Could not load thread: ${e.message}"
             }
@@ -247,6 +255,7 @@ class ChatActivity : AppCompatActivity() {
                         messages.addAll(fresh)
                         adapter.notifyItemRangeInserted(messages.size - fresh.size, fresh.size)
                         recycler.scrollToPosition(messages.size - 1)
+                        try { bridge?.setRead(conversationId, latestId) } catch (_: Exception) {}
                     }
                 } catch (e: Exception) {
                     statusLabel.text = "Reconnecting…"

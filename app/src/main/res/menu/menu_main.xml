@@ -2,6 +2,16 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
+        android:id="@+id/action_all_users"
+        android:icon="@android:drawable/ic_menu_agenda"
+        android:title="All users"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_unread"
+        android:icon="@android:drawable/ic_menu_recent_history"
+        android:title="Unread only"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_update"
         android:icon="@android:drawable/ic_menu_upload"
         android:title="Check for update"

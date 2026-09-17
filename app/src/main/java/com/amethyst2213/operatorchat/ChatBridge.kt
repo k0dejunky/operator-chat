@@ -37,6 +37,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val status: String,
         val lastMessage: String,
         val lastSender: String,
+        val lastMessageAt: String,
         val memberCount: Int,
         val unreadReplyable: Int,
         val updatedAt: String,
@@ -80,6 +81,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                     status = c.optString("status", "open"),
                     lastMessage = c.optString("last_message", ""),
                     lastSender = c.optString("last_sender", ""),
+                    lastMessageAt = c.optString("last_message_at", ""),
                     memberCount = c.optInt("member_count", 0),
                     unreadReplyable = c.optInt("unread_replyable", 0),
                     updatedAt = c.optString("updated_at", ""),
@@ -99,6 +101,24 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             .build()
         client.newCall(req).execute().use { resp ->
             JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
+        }
+    }
+
+    /** POST /webhooks/chat/read — mark the conversation read by the operator. */
+    suspend fun setRead(conversationId: Long, messageId: Long = 0): Boolean = withContext(Dispatchers.IO) {
+        val payload = JSONObject()
+            .put("conversation_id", conversationId)
+            .put("message_id", messageId)
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/read")
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        try {
+            client.newCall(req).execute().use { resp ->
+                JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 

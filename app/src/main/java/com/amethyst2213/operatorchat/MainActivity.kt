@@ -26,8 +26,8 @@ import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.launch
 
 /**
- * Login + users list. Stays logged in across restarts; the login form is
- * hidden once connected. Shows only users with unread member messages.
+ * Login + users list. Shows only users with unread member messages (favourites
+ * pinned to the top), with a menu to view all users (most recent 25, unique).
  */
 class MainActivity : AppCompatActivity() {
 
@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity() {
 
     private var bridge: ChatBridge? = null
     private val conversations = mutableListOf<ChatBridge.Conversation>()
+    private var allUsersMode = false
 
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -54,7 +55,6 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(toolbar)
         supportActionBar?.setTitle("Users list")
 
-        // Keep the toolbar below the OS status bar (edge-to-edge).
         ViewCompat.setOnApplyWindowInsetsListener(toolbar) { v, insets ->
             val top = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
             v.setPadding(0, top, 0, 0)
@@ -81,7 +81,6 @@ class MainActivity : AppCompatActivity() {
             notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // Stay logged in: restore saved credentials and skip the login form.
         val savedUrl = prefs.getString("url", "") ?: ""
         val savedToken = prefs.getString("token", "") ?: ""
         if (savedUrl.isNotEmpty() && savedToken.isNotEmpty()) {
@@ -93,12 +92,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Show/hide the login form based on logged-in state. */
+    override fun onResume() {
+        super.onResume()
+        // Refresh when returning from a chat: reading/reply clears unread.
+        if (bridge != null) loadInbox()
+    }
+
     private fun setLoggedIn(loggedIn: Boolean) {
         loginContainer.visibility = if (loggedIn) View.GONE else View.VISIBLE
-        if (loggedIn) {
-            statusLabel.text = "Loading users…"
-        }
+        if (loggedIn) statusLabel.text = "Loading users…"
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -108,6 +110,18 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
+            R.id.action_all_users -> {
+                allUsersMode = true
+                supportActionBar?.setTitle("All users")
+                loadInbox()
+                true
+            }
+            R.id.action_unread -> {
+                allUsersMode = false
+                supportActionBar?.setTitle("Users list")
+                loadInbox()
+                true
+            }
             R.id.action_settings -> {
                 openSettings()
                 true
@@ -179,22 +193,34 @@ class MainActivity : AppCompatActivity() {
     private fun loadInbox() {
         val b = bridge ?: run { statusLabel.text = "Connect first."; return }
         loadingBar.visibility = View.VISIBLE
-        statusLabel.text = "Loading users…"
+        statusLabel.text = if (allUsersMode) "Loading all users…" else "Loading users…"
         lifecycleScope.launch {
             try {
                 val convs = b.inbox()
-                // Users list: only users with unread member messages appear.
-                val withUnread = convs.filter { it.unreadReplyable > 0 }
-                conversations.clear()
-                conversations.addAll(withUnread)
-                inboxRecycler.adapter?.notifyDataSetChanged()
-                emptyLabel.visibility = if (withUnread.isEmpty()) View.VISIBLE else View.GONE
-                statusLabel.text = if (withUnread.isEmpty()) {
-                    "No new messages."
+                val sorted = convs.sortedByDescending { it.lastMessageAt }
+                val displayed = if (allUsersMode) {
+                    // Most recent 25 unique users, favourites first.
+                    val favs = Favorites.list(this@MainActivity)
+                    val fav = sorted.filter { Favorites.isFavorite(this@MainActivity, it.id) }
+                    val rest = sorted.filter { !Favorites.isFavorite(this@MainActivity, it.id) }
+                    (fav + rest).distinctBy { it.id }.take(25)
                 } else {
-                    "${withUnread.size} user(s) with new messages"
+                    // Unread users; favourites pinned to the top.
+                    val withUnread = sorted.filter { it.unreadReplyable > 0 }
+                    val fav = withUnread.filter { Favorites.isFavorite(this@MainActivity, it.id) }
+                    val rest = withUnread.filter { !Favorites.isFavorite(this@MainActivity, it.id) }
+                    (fav + rest).distinctBy { it.id }
                 }
-                // Background poller for notifications.
+                conversations.clear()
+                conversations.addAll(displayed)
+                inboxRecycler.adapter?.notifyDataSetChanged()
+                emptyLabel.visibility = if (displayed.isEmpty()) View.VISIBLE else View.GONE
+                statusLabel.text = when {
+                    displayed.isEmpty() && allUsersMode -> "No users yet."
+                    displayed.isEmpty() -> "No new messages."
+                    allUsersMode -> "Recent ${displayed.size} user(s)"
+                    else -> "${displayed.size} user(s) with new messages"
+                }
                 try {
                     val si = Intent(this@MainActivity, ChatPollService::class.java)
                     if (Build.VERSION.SDK_INT >= 26) startForegroundService(si) else startService(si)
@@ -226,6 +252,8 @@ class MainActivity : AppCompatActivity() {
         inner class Holder(v: View) : RecyclerView.ViewHolder(v) {
             val title: TextView = v.findViewById(R.id.row_title)
             val badge: TextView = v.findViewById(R.id.row_badge)
+            val star: TextView = v.findViewById(R.id.row_star)
+            val preview: TextView = v.findViewById(R.id.row_preview)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -238,7 +266,22 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(h: Holder, position: Int) {
             val c = data[position]
             h.title.text = c.username.ifEmpty { c.userEmail }
-            h.badge.text = c.unreadReplyable.toString()
+            h.star.text = if (Favorites.isFavorite(this@MainActivity, c.id)) "★" else "☆"
+            h.star.setOnClickListener {
+                Favorites.toggle(this@MainActivity, c.id)
+                loadInbox()
+            }
+            if (allUsersMode) {
+                h.badge.visibility = if (c.unreadReplyable > 0) View.VISIBLE else View.GONE
+                if (c.unreadReplyable > 0) h.badge.text = c.unreadReplyable.toString()
+                h.preview.visibility = View.VISIBLE
+                h.preview.text = (if (c.lastSender == "user") "Member: " else "") +
+                    c.lastMessage.take(60).ifEmpty { "(no messages)" }
+            } else {
+                h.badge.visibility = View.VISIBLE
+                h.badge.text = c.unreadReplyable.toString()
+                h.preview.visibility = View.GONE
+            }
             h.itemView.setOnClickListener { onClick(c) }
         }
     }
