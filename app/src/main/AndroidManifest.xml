@@ -24,6 +24,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ChatActivity"
+            android:exported="false" />
+
         <service
             android:name=".ChatPollService"
             android:exported="false"

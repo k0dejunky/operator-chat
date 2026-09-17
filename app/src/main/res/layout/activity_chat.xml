@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FDF2F8">
+
+    <!-- Header -->
+    <TextView
+        android:id="@+id/thread_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="14dp"
+        android:textSize="17sp"
+        android:textStyle="bold"
+        android:textColor="#4A044E"
+        android:background="#FDF2F8" />
+
+    <TextView
+        android:id="@+id/chat_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingLeft="14dp"
+        android:paddingRight="14dp"
+        android:paddingBottom="4dp"
+        android:textSize="12sp"
+        android:textColor="#9333EA" />
+
+    <!-- Messages -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/message_recycler"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:padding="10dp" />
+
+    <!-- Emoji quick bar -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/emoji_bar"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:visibility="gone"
+        android:background="#FFFFFF" />
+
+    <!-- Bottom reply bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="8dp"
+        android:background="#FFFFFF"
+        android:elevation="6dp">
+
+        <Button
+            android:id="@+id/emoji_button"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:padding="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:contentDescription="Emoji"
+            android:text="😊"
+            android:textSize="18sp"
+            android:background="@drawable/input_bg" />
+
+        <EditText
+            android:id="@+id/reply_input"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginLeft="6dp"
+            android:layout_marginRight="6dp"
+            android:hint="Type a reply…"
+            android:maxLines="4"
+            android:gravity="top"
+            android:background="@drawable/input_bg" />
+
+        <Button
+            android:id="@+id/attach_button"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:padding="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:contentDescription="Attach file"
+            android:text="📎"
+            android:textSize="18sp"
+            android:background="@drawable/input_bg" />
+
+        <Button
+            android:id="@+id/send_button"
+            android:layout_width="48dp"
+            android:layout_height="44dp"
+            android:layout_marginLeft="6dp"
+            android:padding="0dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp"
+            android:contentDescription="Send"
+            android:text="➤"
+            android:textSize="18sp"
+            android:textColor="#FFFFFF"
+            android:background="@drawable/send_bg" />
+    </LinearLayout>
+</LinearLayout>
