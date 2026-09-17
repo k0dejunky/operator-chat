@@ -42,6 +42,7 @@ class ChatActivity : AppCompatActivity() {
     private var bridge: ChatBridge? = null
     private var conversationId: Long = 0
     private var latestId = 0L
+    private var pendingPlaceholderId = 0L
     private val messages = mutableListOf<ChatBridge.Message>()
     private lateinit var adapter: MessageAdapter
     private var streamJob: Job? = null
@@ -131,7 +132,7 @@ class ChatActivity : AppCompatActivity() {
             while (true) {
                 try {
                     val new = bridge?.streamOnce(conversationId, latestId) ?: emptyList()
-                    val fresh = new.filter { it.id > latestId }
+                    val fresh = new.filter { it.id > latestId && messages.none { m -> m.id == it.id } }
                     if (fresh.isNotEmpty()) {
                         latestId = fresh.maxOf { it.id }
                         messages.addAll(fresh)
@@ -152,13 +153,48 @@ class ChatActivity : AppCompatActivity() {
         if (text.isEmpty() && pending == null) return
         input.setText("")
         pendingAttachment = null
+
+        // Optimistic: show the sent message immediately (it will also come
+        // back through the stream with the same id, which the filter skips).
+        val placeholderId = --pendingPlaceholderId
+        val now = "now"
+        val optimistic = ChatBridge.Message(
+            id = placeholderId,
+            conversationId = conversationId,
+            senderRole = "operator",
+            message = text,
+            createdAt = now,
+            attachmentName = pending?.name,
+            attachmentType = null,
+            attachmentUrl = null,
+            attachmentThumbUrl = null,
+        )
+        messages.add(optimistic)
+        adapter.notifyItemInserted(messages.size - 1)
+        recycler.scrollToPosition(messages.size - 1)
+        statusLabel.text = "Sending…"
+
         lifecycleScope.launch {
             try {
-                val ok = bridge?.reply(conversationId, text, pending) ?: false
-                statusLabel.text = if (ok) "Sent" else "Reply failed"
-                if (ok) { /* the stream will deliver the message back */ }
+                val id = bridge?.reply(conversationId, text, pending) ?: 0
+                if (id > 0) {
+                    latestId = maxOf(latestId, id)
+                    // Replace the placeholder with the real message (same id).
+                    val idx = messages.indexOfFirst { it.id == placeholderId }
+                    if (idx >= 0) {
+                        messages[idx] = messages[idx].copy(id = id)
+                        adapter.notifyItemChanged(idx)
+                    }
+                    statusLabel.text = "Sent"
+                } else {
+                    statusLabel.text = "Reply failed"
+                    messages.removeAll { it.id == placeholderId }
+                    adapter.notifyDataSetChanged()
+                }
             } catch (e: Exception) {
                 statusLabel.text = "Send error: ${e.message}"
+                messages.removeAll { it.id == placeholderId }
+                adapter.notifyDataSetChanged()
             }
         }
     }

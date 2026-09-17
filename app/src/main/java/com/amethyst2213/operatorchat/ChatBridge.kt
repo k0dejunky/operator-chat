@@ -88,8 +88,10 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     }
 
     /**
-     * Server-Sent Events stream for real-time updates. Holds the connection
-     * open and returns any new messages that arrive; callers loop for live.
+     * Server-Sent Events stream for real-time updates. Returns as soon as the
+     * first batch of messages arrives (so new messages display immediately
+     * instead of waiting for the 30s stream window to close); callers loop
+     * for continuous live updates.
      */
     suspend fun streamOnce(conversationId: Long, since: Long): List<Message> = withContext(Dispatchers.IO) {
         val req = authed()
@@ -97,7 +99,6 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             .header("Accept", "text/event-stream")
             .get()
             .build()
-        val out = mutableListOf<Message>()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
             val reader = resp.body?.source() ?: return@withContext emptyList()
@@ -106,21 +107,24 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 if (!line.startsWith("data: ")) continue
                 try {
                     val json = JSONObject(line.removePrefix("data: "))
-                    out.addAll(parseMessages(json.optJSONArray("messages"), conversationId))
+                    val msgs = parseMessages(json.optJSONArray("messages"), conversationId)
+                    if (msgs.isNotEmpty()) return@withContext msgs
                 } catch (_: Exception) {
                     // ignore keepalive / partial
                 }
             }
+            emptyList()
         }
-        return@withContext out
     }
 
     /**
      * POST /webhooks/chat/reply — send an operator reply, optionally with a
      * file attachment (image / video / text). Uses multipart when a file is
      * present so the server stores it as an attachment.
+     *
+     * @return the new message id, or 0 on failure.
      */
-    suspend fun reply(conversationId: Long, message: String, attachment: File? = null): Boolean =
+    suspend fun reply(conversationId: Long, message: String, attachment: File? = null): Long =
         withContext(Dispatchers.IO) {
             val reqBuilder = authed().url("$baseUrl/webhooks/chat/reply")
 
@@ -145,7 +149,8 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
 
             client.newCall(reqBuilder.post(body).build()).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
-                JSONObject(text).optBoolean("ok", false)
+                val json = JSONObject(text)
+                if (json.optBoolean("ok", false)) json.optLong("id", 0) else 0
             }
         }
 
