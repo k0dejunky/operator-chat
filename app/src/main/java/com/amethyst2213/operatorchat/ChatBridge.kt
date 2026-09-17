@@ -50,6 +50,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val attachmentName: String?,
         val attachmentType: String?,
         val attachmentUrl: String?,
+        val attachmentThumbUrl: String?,
     )
 
     /** GET /webhooks/chat/inbox — all conversations (no chat id needed). */
@@ -148,6 +149,25 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             }
         }
 
+    /**
+     * Download an attachment (full size or thumbnail) into a temp file.
+     * Returns the file, or null on failure.
+     */
+    fun download(attachmentUrl: String, dest: File): File? {
+        val req = authed().url("$baseUrl$attachmentUrl").get().build()
+        return try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                resp.body?.byteStream()?.use { ins ->
+                    dest.outputStream().use { ous -> ins.copyTo(ous) }
+                }
+                dest
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun parseMessages(arr: JSONArray?, conversationId: Long): List<Message> {
         if (arr == null) return emptyList()
         return (0 until arr.length()).map { i ->
@@ -161,6 +181,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 attachmentName = m.optString("attachment_name", "").ifEmpty { null },
                 attachmentType = m.optString("attachment_type", "").ifEmpty { null },
                 attachmentUrl = m.optString("attachment_url", "").ifEmpty { null },
+                attachmentThumbUrl = m.optString("attachment_thumb_url", "").ifEmpty { null },
             )
         }
     }

@@ -181,6 +181,7 @@ class ChatActivity : AppCompatActivity() {
             val bubble: TextView = v.findViewById(R.id.bubble)
             val sender: TextView = v.findViewById(R.id.sender_label)
             val attach: TextView = v.findViewById(R.id.attach_label)
+            val image: android.widget.ImageView = v.findViewById(R.id.attach_image)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -201,11 +202,63 @@ class ChatActivity : AppCompatActivity() {
             h.bubble.text = m.message.ifEmpty { "" }
             h.bubble.setBackgroundColor(if (mine) 0xFF9333EA.toInt() else 0xFFFDF2F8.toInt())
             h.bubble.setTextColor(if (mine) 0xFFFFFFFF.toInt() else 0xFF4A044E.toInt())
+
+            // Reset image slot each bind.
+            h.image.setImageDrawable(null)
+            h.image.visibility = View.GONE
+            h.image.setOnClickListener(null)
+
             if (m.attachmentName != null) {
-                h.attach.text = "📎 " + m.attachmentName
-                h.attach.visibility = View.VISIBLE
+                if (m.attachmentThumbUrl != null) {
+                    // Image attachment: show thumbnail, tap to open full size.
+                    h.image.visibility = View.VISIBLE
+                    h.image.setTag(m.id)
+                    loadThumb(m, h.image)
+                    h.image.setOnClickListener { openFullImage(m) }
+                    h.attach.visibility = View.GONE
+                } else {
+                    h.attach.text = "📎 " + m.attachmentName
+                    h.attach.visibility = View.VISIBLE
+                }
             } else {
                 h.attach.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun loadThumb(m: ChatBridge.Message, iv: android.widget.ImageView) {
+        val b = bridge ?: return
+        lifecycleScope.launch {
+            val f = File(cacheDir, "thumb_${m.id}.jpg")
+            val dl = b.download(m.attachmentThumbUrl ?: return@launch, f)
+            if (dl != null && iv.getTag() == m.id) {
+                try {
+                    val bmp = android.graphics.BitmapFactory.decodeFile(dl.absolutePath)
+                    iv.setImageBitmap(bmp)
+                } catch (_: Exception) { /* ignore decode error */ }
+            }
+        }
+    }
+
+    private fun openFullImage(m: ChatBridge.Message) {
+        val b = bridge ?: return
+        statusLabel.text = "Loading full image…"
+        lifecycleScope.launch {
+            val f = File(cacheDir, "full_${m.id}_" + System.currentTimeMillis() + ".img")
+            val dl = b.download(m.attachmentUrl ?: return@launch, f)
+            if (dl == null) {
+                statusLabel.text = "Could not load image."
+                return@launch
+            }
+            try {
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                    setDataAndType(androidx.core.content.FileProvider.getUriForFile(this@ChatActivity, "$packageName.fileprovider", dl), "image/*")
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(intent)
+                statusLabel.text = "Live"
+            } catch (e: Exception) {
+                statusLabel.text = "No image viewer available."
             }
         }
     }
