@@ -38,6 +38,9 @@ class ChatPollService : Service() {
             job = scope.launch {
                 // high-water mark per conversation: id -> last seen member message id
                 val seen = mutableMapOf<Long, Long>()
+                // First pass primes the high-water marks without notifying, so
+                // pre-existing unread messages don't trigger alerts on start.
+                var primed = false
                 while (true) {
                     try {
                         val convs = bridge.inbox()
@@ -45,14 +48,16 @@ class ChatPollService : Service() {
                         val globalOn = prefs.getBoolean("notify_enabled", true)
                         val defaultTone = prefs.getString("notify_tone", null)
                         for (c in convs) {
-                            if (!globalOn) break
                             val chatKey = "chat_${c.id}"
                             if (!prefs.getBoolean("${chatKey}_notify", true)) continue
 
                             val msgs = bridge.thread(c.id)
                             val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
                             val last = seen[c.id] ?: 0L
-                            if (newestMember > last) {
+
+                            // Only notify for genuinely new member messages, and
+                            // only after the initial high-water mark is primed.
+                            if (globalOn && primed && newestMember > last && newestMember > 0) {
                                 val tone = prefs.getString("${chatKey}_tone", null) ?: defaultTone
                                 notifyNewMessage(c, tone)
                             }
@@ -60,6 +65,7 @@ class ChatPollService : Service() {
                                 seen[c.id] = newestMember
                             }
                         }
+                        primed = true
                     } catch (_: Exception) {
                         // transient; retry
                     }
