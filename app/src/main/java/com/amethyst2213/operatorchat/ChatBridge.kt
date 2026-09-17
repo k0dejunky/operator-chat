@@ -91,7 +91,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      * Server-Sent Events stream for real-time updates. Holds the connection
      * open and returns any new messages that arrive; callers loop for live.
      */
-    fun streamOnce(conversationId: Long, since: Long): List<Message> {
+    suspend fun streamOnce(conversationId: Long, since: Long): List<Message> = withContext(Dispatchers.IO) {
         val req = authed()
             .url("$baseUrl/webhooks/chat/stream?conversation=$conversationId&since=$since")
             .header("Accept", "text/event-stream")
@@ -100,7 +100,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val out = mutableListOf<Message>()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
-            val reader = resp.body?.source() ?: return emptyList()
+            val reader = resp.body?.source() ?: return@withContext emptyList()
             while (true) {
                 val line = reader.readUtf8Line() ?: break
                 if (!line.startsWith("data: ")) continue
@@ -112,7 +112,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 }
             }
         }
-        return out
+        return@withContext out
     }
 
     /**
@@ -153,11 +153,11 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      * Download an attachment (full size or thumbnail) into a temp file.
      * Returns the file, or null on failure.
      */
-    fun download(attachmentUrl: String, dest: File): File? {
+    suspend fun download(attachmentUrl: String, dest: File): File? = withContext(Dispatchers.IO) {
         val req = authed().url("$baseUrl$attachmentUrl").get().build()
-        return try {
+        try {
             client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return null
+                if (!resp.isSuccessful) return@withContext null
                 resp.body?.byteStream()?.use { ins ->
                     dest.outputStream().use { ous -> ins.copyTo(ous) }
                 }
