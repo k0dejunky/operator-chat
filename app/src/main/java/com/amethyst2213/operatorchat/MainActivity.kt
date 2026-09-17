@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -94,11 +95,17 @@ class MainActivity : AppCompatActivity() {
         prefs.edit().putString("url", url).putString("token", token).apply()
         bridge = ChatBridge(url, token)
         // Start the background poller for new-message notifications.
-        val si = android.content.Intent(this, ChatPollService::class.java)
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(si)
-        } else {
-            startService(si)
+        try {
+            val si = android.content.Intent(this, ChatPollService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(si)
+            } else {
+                startService(si)
+            }
+        } catch (e: Exception) {
+            // Foreground service start can fail on some OEM builds; the app
+            // still works for active use — just no background notifications.
+            Log.w("OperatorChat", "service start failed", e)
         }
         statusLabel.text = "Connected — loading inbox…"
         loadInbox()
