@@ -84,7 +84,15 @@ class ChatPollService : Service() {
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_popup_sync)
             .setOngoing(true)
+            .setContentIntent(openAppIntent())
             .build()
+    }
+
+    private fun openAppIntent(): android.app.PendingIntent {
+        val i = Intent(this, MainActivity::class.java)
+        i.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        return android.app.PendingIntent.getActivity(this, 0, i,
+            if (Build.VERSION.SDK_INT >= 23) android.app.PendingIntent.FLAG_IMMUTABLE else 0)
     }
 
     private fun notifyNewMessages(count: Int) {
@@ -99,6 +107,7 @@ class ChatPollService : Service() {
             .setContentText("$count conversation(s) have a new member message")
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setAutoCancel(true)
+            .setContentIntent(openAppIntent())
             .build()
         NotificationManagerCompat.from(this).notify(999, n)
     }

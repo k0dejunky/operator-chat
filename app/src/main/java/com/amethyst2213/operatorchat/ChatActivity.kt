@@ -7,7 +7,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
-import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -30,9 +29,9 @@ class ChatActivity : AppCompatActivity() {
 
     private lateinit var recycler: RecyclerView
     private lateinit var input: EditText
-    private lateinit var sendButton: ImageButton
-    private lateinit var emojiButton: ImageButton
-    private lateinit var attachButton: ImageButton
+    private lateinit var sendButton: Button
+    private lateinit var emojiButton: Button
+    private lateinit var attachButton: Button
     private lateinit var emojiBar: RecyclerView
     private lateinit var titleLabel: TextView
     private lateinit var statusLabel: TextView
