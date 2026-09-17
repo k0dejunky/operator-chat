@@ -345,6 +345,23 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     }
 
     private fun guessMediaType(f: File): String {
+        // First sniff the content's magic bytes — phone gallery files often
+        // have no recognisable extension.
+        try {
+            val head = f.inputStream().use { it.readBytes().take(16).toByteArray() }
+            val hex = head.joinToString("") { b -> String.format("%02X", b) }
+            when {
+                hex.startsWith("FFD8FF") -> return "image/jpeg"
+                hex.startsWith("89504E47") -> return "image/png"
+                hex.startsWith("47494638") -> return "image/gif"
+                hex.startsWith("52494646") && hex.length >= 24 &&
+                    hex.substring(16, 20) == "57454250" -> return "image/webp" // RIFF....WEBP
+                hex.length >= 24 && hex.substring(16, 20) == "66747970" -> return "video/mp4" // ....ftyp
+            }
+        } catch (_: Exception) {
+            // fall through to extension-based guess
+        }
+
         val name = f.name.lowercase()
         return when {
             name.endsWith(".png") -> "image/png"
