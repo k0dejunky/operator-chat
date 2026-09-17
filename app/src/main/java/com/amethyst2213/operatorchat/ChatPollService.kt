@@ -41,21 +41,24 @@ class ChatPollService : Service() {
                 while (true) {
                     try {
                         val convs = bridge.inbox()
-                        var newTotal = 0
+                        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+                        val globalOn = prefs.getBoolean("notify_enabled", true)
+                        val defaultTone = prefs.getString("notify_tone", null)
                         for (c in convs) {
-                            // refresh the thread to learn the newest member message id
+                            if (!globalOn) break
+                            val chatKey = "chat_${c.id}"
+                            if (!prefs.getBoolean("${chatKey}_notify", true)) continue
+
                             val msgs = bridge.thread(c.id)
                             val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
                             val last = seen[c.id] ?: 0L
                             if (newestMember > last) {
-                                newTotal += 1
+                                val tone = prefs.getString("${chatKey}_tone", null) ?: defaultTone
+                                notifyNewMessage(c, tone)
                             }
                             if (newestMember > last || last == 0L) {
                                 seen[c.id] = newestMember
                             }
-                        }
-                        if (newTotal > 0) {
-                            notifyNewMessages(newTotal)
                         }
                     } catch (_: Exception) {
                         // transient; retry
@@ -95,21 +98,24 @@ class ChatPollService : Service() {
             if (Build.VERSION.SDK_INT >= 23) android.app.PendingIntent.FLAG_IMMUTABLE else 0)
     }
 
-    private fun notifyNewMessages(count: Int) {
+    private fun notifyNewMessage(c: ChatBridge.Conversation, tone: String?) {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= 26) {
             nm.createNotificationChannel(
                 NotificationChannel(CHANNEL_ID_NEW, "New member messages", NotificationManager.IMPORTANCE_HIGH)
             )
         }
-        val n = NotificationCompat.Builder(this, CHANNEL_ID_NEW)
-            .setContentTitle("New chat message")
-            .setContentText("$count conversation(s) have a new member message")
+        val name = c.username.ifEmpty { c.userEmail }
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID_NEW)
+            .setContentTitle("New message from $name")
+            .setContentText("${c.unreadReplyable} new message(s) — tap to open")
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setAutoCancel(true)
             .setContentIntent(openAppIntent())
-            .build()
-        NotificationManagerCompat.from(this).notify(999, n)
+        if (tone != null) {
+            builder.setSound(android.net.Uri.parse(tone))
+        }
+        NotificationManagerCompat.from(this).notify((1000 + c.id).toInt(), builder.build())
     }
 
     companion object {

@@ -1,5 +1,7 @@
 package com.amethyst2213.operatorchat
 
+import android.app.AlertDialog
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -35,7 +37,6 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var emojiButton: Button
     private lateinit var attachButton: Button
     private lateinit var emojiBar: RecyclerView
-    private lateinit var titleLabel: TextView
     private lateinit var statusLabel: TextView
     private lateinit var root: View
 
@@ -46,6 +47,8 @@ class ChatActivity : AppCompatActivity() {
     private val messages = mutableListOf<ChatBridge.Message>()
     private lateinit var adapter: MessageAdapter
     private var streamJob: Job? = null
+
+    private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
 
     private val pickAttachment = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) attachFromUri(uri)
@@ -64,13 +67,17 @@ class ChatActivity : AppCompatActivity() {
         emojiButton = findViewById(R.id.emoji_button)
         attachButton = findViewById(R.id.attach_button)
         emojiBar = findViewById(R.id.emoji_bar)
-        titleLabel = findViewById(R.id.thread_title)
         statusLabel = findViewById(R.id.chat_status)
+
+        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.chat_toolbar)
+        setSupportActionBar(toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
 
         conversationId = intent.getLongExtra("conversation_id", 0)
         val url = intent.getStringExtra("base_url") ?: ""
         val token = intent.getStringExtra("token") ?: ""
-        titleLabel.text = "Chat with ${intent.getStringExtra("user_email") ?: "#$conversationId"}"
+        val username = intent.getStringExtra("username") ?: "#$conversationId"
+        supportActionBar?.title = username
 
         // Keep the bottom reply bar above the soft keyboard (edge-to-edge on
         // targetSdk 35 means adjustResize alone is not enough).
@@ -112,6 +119,100 @@ class ChatActivity : AppCompatActivity() {
     override fun onDestroy() {
         streamJob?.cancel()
         super.onDestroy()
+    }
+
+    override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_chat, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
+        return when (item.itemId) {
+            android.R.id.home -> {
+                finish()
+                true
+            }
+            R.id.action_chat_settings -> {
+                showChatSettings()
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    /** Per-chat settings: AI mode + notification tone + notifications on/off. */
+    private fun showChatSettings() {
+        val b = bridge ?: return
+        val currentMode = intent.getStringExtra("ai_mode") ?: "retrieval"
+        val modes = arrayOf("retrieval", "finetuned", "operator")
+        val labels = arrayOf("Retrieval (AI + history)", "Finetuned (trained AI)", "Operator (manual)")
+        val checked = modes.indexOf(currentMode).coerceAtLeast(0)
+
+        val chatKey = "chat_$conversationId"
+        val notifyOn = prefs.getBoolean("${chatKey}_notify", true)
+        val tone = prefs.getString("${chatKey}_tone", "").orEmpty()
+
+        val options = arrayOf(
+            "Chat mode: ${labels[checked]}",
+            "Notifications: ${if (notifyOn) "ON" else "OFF"}",
+            "Notification tone: ${if (tone.isEmpty()) "Default" else tone.substringAfterLast('/')}"
+        )
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Chat settings")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> pickMode(modes, labels, checked, b)
+                    1 -> {
+                        val on = !notifyOn
+                        prefs.edit().putBoolean("${chatKey}_notify", on).apply()
+                        showChatSettings()
+                    }
+                    2 -> pickChatTone(chatKey)
+                }
+            }
+            .setPositiveButton("Done", null)
+            .create()
+        dialog.show()
+    }
+
+    private fun pickMode(modes: Array<String>, labels: Array<String>, checked: Int, b: ChatBridge) {
+        AlertDialog.Builder(this)
+            .setTitle("Chat mode")
+            .setSingleChoiceItems(labels, checked) { _, which ->
+                statusLabel.text = "Setting mode…"
+                val mode = modes[which]
+                lifecycleScope.launch {
+                    val ok = b.setMode(conversationId, mode)
+                    statusLabel.text = if (ok) "Mode set to ${labels[which]}" else "Mode update failed"
+                    if (ok) intent.putExtra("ai_mode", mode)
+                }
+            }
+            .setPositiveButton("Cancel", null)
+            .create()
+            .show()
+    }
+
+    private fun pickChatTone(chatKey: String) {
+        val intent = android.content.Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Chat notification tone")
+            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                Uri.parse(prefs.getString("${chatKey}_tone", null)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION).toString()))
+        }
+        chatToneResult.launch(intent)
+    }
+
+    private val chatToneResult = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        if (uri != null) {
+            prefs.edit().putString("${"chat_$conversationId"}_tone", uri.toString()).apply()
+            showChatSettings()
+        }
     }
 
     private fun startStream() {

@@ -7,15 +7,12 @@
     android:background="#FDF2F8">
 
     <!-- Header -->
-    <TextView
-        android:id="@+id/thread_title"
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/chat_toolbar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="14dp"
-        android:textSize="17sp"
-        android:textStyle="bold"
-        android:textColor="#4A044E"
-        android:background="#FDF2F8" />
+        android:layout_height="?attr/actionBarSize"
+        android:background="#7E22CE"
+        android:titleTextColor="#FFFFFF" />
 
     <TextView
         android:id="@+id/chat_status"

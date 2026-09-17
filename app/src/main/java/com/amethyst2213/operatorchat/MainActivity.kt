@@ -5,6 +5,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -14,6 +16,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -21,7 +24,8 @@ import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.launch
 
 /**
- * Login + inbox. Lists every conversation; tapping one opens ChatActivity.
+ * Login + users list. Shows only users with unread member messages (a badge
+ * with the count), and provides the app navigation menu.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -42,6 +46,10 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        val toolbar = findViewById<Toolbar>(R.id.toolbar)
+        setSupportActionBar(toolbar)
+        supportActionBar?.setTitle("Users list")
 
         urlInput = findViewById(R.id.url_input)
         tokenInput = findViewById(R.id.token_input)
@@ -65,6 +73,64 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_main, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_settings -> {
+                openSettings()
+                true
+            }
+            R.id.action_update -> {
+                checkForUpdate()
+                true
+            }
+            R.id.action_logout -> {
+                prefs.edit().remove("url").remove("token").apply()
+                bridge = null
+                conversations.clear()
+                inboxRecycler.adapter?.notifyDataSetChanged()
+                emptyLabel.visibility = View.VISIBLE
+                statusLabel.text = "Logged out — enter server URL + token."
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+
+    private fun openSettings() {
+        val url = urlInput.text.toString().trim().trimEnd('/')
+        val i = Intent(this, SettingsActivity::class.java)
+        i.putExtra("base_url", url)
+        startActivity(i)
+    }
+
+    private fun checkForUpdate() {
+        val url = urlInput.text.toString().trim().trimEnd('/')
+        if (url.isEmpty()) {
+            statusLabel.text = "Enter the server URL first."
+            return
+        }
+        statusLabel.text = "Checking for updates…"
+        val b = ChatBridge(url, prefs.getString("token", "") ?: "")
+        lifecycleScope.launch {
+            val v = b.checkForUpdate()
+            if (v == null) {
+                statusLabel.text = "Could not reach the update server."
+                return@launch
+            }
+            val current = packageManager.getPackageInfo(packageName, 0).versionCode.toLong()
+            if (v.versionCode > current) {
+                Updater.downloadAndInstall(this@MainActivity, url, v, statusLabel)
+            } else {
+                statusLabel.text = "You're on the latest version (${v.latestVersion})."
+            }
+        }
+    }
+
     private fun connect() {
         val url = urlInput.text.toString().trim().trimEnd('/')
         val token = tokenInput.text.toString().trim()
@@ -80,18 +146,24 @@ class MainActivity : AppCompatActivity() {
     private fun loadInbox() {
         val b = bridge ?: run { statusLabel.text = "Connect first."; return }
         loadingBar.visibility = View.VISIBLE
-        statusLabel.text = "Loading inbox…"
+        statusLabel.text = "Loading users…"
         lifecycleScope.launch {
             try {
                 val convs = b.inbox()
+                // Users list: only users with unread member messages appear.
+                val withUnread = convs.filter { it.unreadReplyable > 0 }
                 conversations.clear()
-                conversations.addAll(convs)
+                conversations.addAll(withUnread)
                 inboxRecycler.adapter?.notifyDataSetChanged()
-                emptyLabel.visibility = if (convs.isEmpty()) View.VISIBLE else View.GONE
-                statusLabel.text = "${convs.size} conversation(s) — tap to open"
+                emptyLabel.visibility = if (withUnread.isEmpty()) View.VISIBLE else View.GONE
+                statusLabel.text = if (withUnread.isEmpty()) {
+                    "No new messages."
+                } else {
+                    "${withUnread.size} user(s) with new messages"
+                }
                 // Background poller for notifications.
                 try {
-                    val si = android.content.Intent(this@MainActivity, ChatPollService::class.java)
+                    val si = Intent(this@MainActivity, ChatPollService::class.java)
                     if (Build.VERSION.SDK_INT >= 26) startForegroundService(si) else startService(si)
                 } catch (_: Exception) {}
             } catch (e: Exception) {
@@ -107,7 +179,8 @@ class MainActivity : AppCompatActivity() {
         i.putExtra("base_url", urlInput.text.toString().trim().trimEnd('/'))
         i.putExtra("token", tokenInput.text.toString().trim())
         i.putExtra("conversation_id", c.id)
-        i.putExtra("user_email", c.userEmail)
+        i.putExtra("username", c.username.ifEmpty { c.userEmail })
+        i.putExtra("ai_mode", c.aiMode)
         startActivity(i)
     }
 
@@ -119,12 +192,11 @@ class MainActivity : AppCompatActivity() {
 
         inner class Holder(v: View) : RecyclerView.ViewHolder(v) {
             val title: TextView = v.findViewById(R.id.row_title)
-            val last: TextView = v.findViewById(R.id.row_last)
-            val meta: TextView = v.findViewById(R.id.row_meta)
+            val badge: TextView = v.findViewById(R.id.row_badge)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            val v = layoutInflater.inflate(R.layout.row_conversation, parent, false)
+            val v = layoutInflater.inflate(R.layout.row_user, parent, false)
             return Holder(v)
         }
 
@@ -132,11 +204,8 @@ class MainActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(h: Holder, position: Int) {
             val c = data[position]
-            h.title.text = c.userEmail.ifEmpty { "Conversation #${c.id}" }
-            h.last.text = (if (c.lastSender == "user") "Member: " else "") + c.lastMessage.take(90).ifEmpty { "(no messages)" }
-            h.meta.text = "${c.memberCount} member msg(s)" +
-                (if (c.unreadReplyable > 0) " · ${c.unreadReplyable} need reply" else "") +
-                " · mode ${c.aiMode}"
+            h.title.text = c.username.ifEmpty { c.userEmail }
+            h.badge.text = c.unreadReplyable.toString()
             h.itemView.setOnClickListener { onClick(c) }
         }
     }

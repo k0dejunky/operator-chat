@@ -32,6 +32,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     data class Conversation(
         val id: Long,
         val userEmail: String,
+        val username: String,
         val aiMode: String,
         val status: String,
         val lastMessage: String,
@@ -39,6 +40,13 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val memberCount: Int,
         val unreadReplyable: Int,
         val updatedAt: String,
+    )
+
+    data class AppVersion(
+        val latestVersion: String,
+        val versionCode: Long,
+        val apkUrl: String,
+        val changelog: String,
     )
 
     data class Message(
@@ -65,6 +73,9 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 Conversation(
                     id = c.optLong("id", 0),
                     userEmail = c.optString("user_email", ""),
+                    username = c.optString("username", "").ifEmpty {
+                        c.optString("user_email", "").substringBefore("@")
+                    },
                     aiMode = c.optString("ai_mode", "retrieval"),
                     status = c.optString("status", "open"),
                     lastMessage = c.optString("last_message", ""),
@@ -74,6 +85,42 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                     updatedAt = c.optString("updated_at", ""),
                 )
             }
+        }
+    }
+
+    /** POST /webhooks/chat/mode — change a conversation's AI mode. */
+    suspend fun setMode(conversationId: Long, mode: String): Boolean = withContext(Dispatchers.IO) {
+        val payload = JSONObject()
+            .put("conversation_id", conversationId)
+            .put("ai_mode", mode)
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/mode")
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
+        }
+    }
+
+    /** GET /assets/apk/operator-chat-version.json — latest app version. */
+    suspend fun checkForUpdate(): AppVersion? = withContext(Dispatchers.IO) {
+        val req = Request.Builder()
+            .url("$baseUrl/assets/apk/operator-chat-version.json")
+            .get()
+            .build()
+        try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val j = JSONObject(resp.body?.string().orEmpty())
+                AppVersion(
+                    latestVersion = j.optString("latestVersion", ""),
+                    versionCode = j.optLong("versionCode", 0),
+                    apkUrl = j.optString("apkUrl", ""),
+                    changelog = j.optString("changelog", ""),
+                )
+            }
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -160,6 +207,24 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      */
     suspend fun download(attachmentUrl: String, dest: File): File? = withContext(Dispatchers.IO) {
         val req = authed().url("$baseUrl$attachmentUrl").get().build()
+        try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                resp.body?.byteStream()?.use { ins ->
+                    dest.outputStream().use { ous -> ins.copyTo(ous) }
+                }
+                dest
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Download a full (absolute) URL into a file. Used for the APK update.
+     */
+    suspend fun downloadFile(url: String, dest: File): File? = withContext(Dispatchers.IO) {
+        val req = Request.Builder().url(url).get().build()
         try {
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
