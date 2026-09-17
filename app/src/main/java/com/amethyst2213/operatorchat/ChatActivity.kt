@@ -289,12 +289,24 @@ class ChatActivity : AppCompatActivity() {
             try {
                 val id = bridge?.reply(conversationId, text, pending) ?: 0
                 if (id > 0) {
-                    latestId = maxOf(latestId, id)
-                    // Replace the placeholder with the real message (same id).
-                    val idx = messages.indexOfFirst { it.id == placeholderId }
-                    if (idx >= 0) {
-                        messages[idx] = messages[idx].copy(id = id)
-                        adapter.notifyItemChanged(idx)
+                    if (pending != null) {
+                        // Attachment sent: reload the thread so the real message
+                        // (with image/thumb URLs) renders inline instead of the
+                        // placeholder's download link.
+                        val fresh = bridge?.thread(conversationId) ?: emptyList()
+                        messages.clear()
+                        messages.addAll(fresh)
+                        latestId = fresh.maxOfOrNull { it.id } ?: id
+                        adapter.notifyDataSetChanged()
+                        recycler.scrollToPosition(messages.size - 1)
+                    } else {
+                        latestId = maxOf(latestId, id)
+                        // Replace the placeholder with the real message (same id).
+                        val idx = messages.indexOfFirst { it.id == placeholderId }
+                        if (idx >= 0) {
+                            messages[idx] = messages[idx].copy(id = id)
+                            adapter.notifyItemChanged(idx)
+                        }
                     }
                     statusLabel.text = "Sent"
                 } else {
