@@ -21,6 +21,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -41,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private var bridge: ChatBridge? = null
     private val conversations = mutableListOf<ChatBridge.Conversation>()
     private var allUsersMode = false
+    private var refreshJob: Job? = null
 
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
@@ -87,7 +90,12 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         // Refresh when returning from a chat: reading/reply clears unread.
-        if (bridge != null) loadInbox()
+        if (bridge != null) loadInbox(showLoading = false)
+    }
+
+    override fun onDestroy() {
+        stopRefreshLoop()
+        super.onDestroy()
     }
 
     private fun setLoggedIn(loggedIn: Boolean) {
@@ -129,6 +137,7 @@ class MainActivity : AppCompatActivity() {
                 inboxRecycler.adapter?.notifyDataSetChanged()
                 emptyLabel.visibility = View.GONE
                 setLoggedIn(false)
+                stopRefreshLoop()
                 statusLabel.text = "Logged out — enter server URL + token."
                 try {
                     stopService(Intent(this, ChatPollService::class.java))
@@ -182,17 +191,18 @@ class MainActivity : AppCompatActivity() {
         loadInbox()
     }
 
-    private fun loadInbox() {
+    private fun loadInbox(showLoading: Boolean = true) {
         val b = bridge ?: run { statusLabel.text = "Connect first."; return }
-        loadingBar.visibility = View.VISIBLE
-        statusLabel.text = if (allUsersMode) "Loading all users…" else "Loading users…"
+        if (showLoading) {
+            loadingBar.visibility = View.VISIBLE
+            statusLabel.text = if (allUsersMode) "Loading all users…" else "Loading users…"
+        }
         lifecycleScope.launch {
             try {
                 val convs = b.inbox()
                 val sorted = convs.sortedByDescending { it.lastMessageAt }
                 val displayed = if (allUsersMode) {
                     // Most recent 25 unique users, favourites first.
-                    val favs = Favorites.list(this@MainActivity)
                     val fav = sorted.filter { Favorites.isFavorite(this@MainActivity, it.id) }
                     val rest = sorted.filter { !Favorites.isFavorite(this@MainActivity, it.id) }
                     (fav + rest).distinctBy { it.id }.take(25)
@@ -213,16 +223,37 @@ class MainActivity : AppCompatActivity() {
                     allUsersMode -> "Recent ${displayed.size} user(s)"
                     else -> "${displayed.size} user(s) with new messages"
                 }
+                startRefreshLoop()
                 try {
                     val si = Intent(this@MainActivity, ChatPollService::class.java)
                     if (Build.VERSION.SDK_INT >= 26) startForegroundService(si) else startService(si)
                 } catch (_: Exception) {}
             } catch (e: Exception) {
-                statusLabel.text = "Error: ${e.message ?: "connection failed"} — check URL/token."
+                if (showLoading) {
+                    statusLabel.text = "Error: ${e.message ?: "connection failed"} — check URL/token."
+                }
             } finally {
-                loadingBar.visibility = View.GONE
+                if (showLoading) {
+                    loadingBar.visibility = View.GONE
+                }
             }
         }
+    }
+
+    /** Poll the inbox every few seconds so new-message badges appear live. */
+    private fun startRefreshLoop() {
+        if (refreshJob?.isActive == true) return
+        refreshJob = lifecycleScope.launch {
+            while (true) {
+                delay(5000)
+                loadInbox(showLoading = false)
+            }
+        }
+    }
+
+    private fun stopRefreshLoop() {
+        refreshJob?.cancel()
+        refreshJob = null
     }
 
     private fun openChat(c: ChatBridge.Conversation) {
