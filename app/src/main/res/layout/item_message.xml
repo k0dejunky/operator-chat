@@ -11,8 +11,8 @@
         android:id="@+id/sender_label"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginBottom="3dp"
-        android:textSize="11sp"
+        android:layout_marginBottom="1dp"
+        android:textSize="10sp"
         android:textColor="#A78BFA" />
 
     <LinearLayout
@@ -26,12 +26,12 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:maxWidth="320dp"
-            android:paddingLeft="14dp"
-            android:paddingTop="10dp"
-            android:paddingRight="14dp"
-            android:paddingBottom="10dp"
+            android:paddingLeft="6dp"
+            android:paddingTop="4dp"
+            android:paddingRight="6dp"
+            android:paddingBottom="4dp"
             android:textSize="15sp"
-            android:lineSpacingExtra="2dp" />
+            android:lineSpacingExtra="1dp" />
 
         <TextView
             android:id="@+id/attach_label"
