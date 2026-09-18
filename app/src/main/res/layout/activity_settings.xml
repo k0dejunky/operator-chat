@@ -3,14 +3,14 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="#FDF2F8">
+    android:background="@color/surface">
 
     <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
-        android:background="#7E22CE"
-        android:titleTextColor="#FFFFFF" />
+        android:background="@color/purple_dark"
+        android:titleTextColor="@color/white" />
 
     <TextView
         android:id="@+id/notify_status"
@@ -18,7 +18,7 @@
         android:layout_height="wrap_content"
         android:padding="16dp"
         android:textSize="15sp"
-        android:textColor="#4A044E" />
+        android:textColor="@color/text" />
 
     <Button
         android:id="@+id/btn_notify_toggle"
@@ -34,7 +34,7 @@
         android:layout_height="wrap_content"
         android:padding="16dp"
         android:textSize="15sp"
-        android:textColor="#4A044E" />
+        android:textColor="@color/text" />
 
     <Button
         android:id="@+id/btn_tone"
@@ -48,7 +48,7 @@
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_marginTop="20dp"
-        android:background="#E9D5FF" />
+        android:background="@color/border" />
 
     <TextView
         android:id="@+id/update_label"
@@ -56,7 +56,7 @@
         android:layout_height="wrap_content"
         android:padding="16dp"
         android:textSize="14sp"
-        android:textColor="#4A044E" />
+        android:textColor="@color/text" />
 
     <Button
         android:id="@+id/btn_check_update"

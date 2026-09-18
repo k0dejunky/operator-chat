@@ -20,7 +20,7 @@
             android:textSize="20sp"
             android:text="☆"
             android:gravity="center"
-            android:textColor="#9333EA" />
+            android:textColor="@color/purple" />
 
         <TextView
             android:id="@+id/row_title"
@@ -29,7 +29,7 @@
             android:layout_weight="1"
             android:textSize="16sp"
             android:textStyle="bold"
-            android:textColor="#4A044E" />
+            android:textColor="@color/text" />
 
         <TextView
             android:id="@+id/row_badge"
@@ -39,7 +39,7 @@
             android:minWidth="28dp"
             android:textSize="13sp"
             android:textStyle="bold"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/white"
             android:background="@drawable/badge_bg" />
     </LinearLayout>
 
@@ -52,6 +52,6 @@
         android:maxLines="1"
         android:ellipsize="end"
         android:textSize="13sp"
-        android:textColor="#6B21A8"
+        android:textColor="@color/text_secondary"
         android:visibility="gone" />
 </LinearLayout>

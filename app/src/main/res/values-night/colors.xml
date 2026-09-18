@@ -1,0 +1,12 @@
+<resources>
+    <color name="purple">#C4B5FD</color>
+    <color name="purple_dark">#7C3AED</color>
+    <color name="purple_light">#312E81</color>
+    <color name="white">#FFFFFF</color>
+    <color name="pink_100">#1B1420</color>
+    <color name="surface">#17121B</color>
+    <color name="surface_card">#241B2A</color>
+    <color name="text">#F7ECFF</color>
+    <color name="text_secondary">#D1C2D7</color>
+    <color name="border">#4A3B52</color>
+</resources>

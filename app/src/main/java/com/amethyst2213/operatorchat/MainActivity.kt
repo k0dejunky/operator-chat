@@ -47,8 +47,8 @@ class MainActivity : AppCompatActivity() {
     private val conversations = mutableListOf<ChatBridge.Conversation>()
     private var allUsersMode = false
     private var refreshJob: Job? = null
+    private var inboxJob: Job? = null
 
-    private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     /** Refresh badges as soon as the poll service sees a new message (push). */
@@ -88,8 +88,8 @@ class MainActivity : AppCompatActivity() {
             notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        val savedUrl = prefs.getString("url", "") ?: ""
-        val savedToken = prefs.getString("token", "") ?: ""
+        val savedUrl = SecurePrefs.url(this)
+        val savedToken = SecurePrefs.token(this)
         if (savedUrl.isNotEmpty() && savedToken.isNotEmpty()) {
             urlInput.setText(savedUrl)
             tokenInput.setText(savedToken)
@@ -109,6 +109,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        inboxJob?.cancel()
         stopRefreshLoop()
         try { unregisterReceiver(chatEventReceiver) } catch (_: Exception) {}
         super.onDestroy()
@@ -147,7 +148,7 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             R.id.action_logout -> {
-                prefs.edit().remove("url").remove("token").apply()
+                SecurePrefs.clear(this)
                 bridge = null
                 conversations.clear()
                 inboxRecycler.adapter?.notifyDataSetChanged()
@@ -178,7 +179,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         statusLabel.text = "Checking for updates…"
-        val b = ChatBridge(url, prefs.getString("token", "") ?: "")
+        val b = ChatBridge(url, SecurePrefs.token(this))
         lifecycleScope.launch {
             val v = b.checkForUpdate()
             if (v == null) {
@@ -201,7 +202,7 @@ class MainActivity : AppCompatActivity() {
             statusLabel.text = "Server URL and token are required."
             return
         }
-        prefs.edit().putString("url", url).putString("token", token).apply()
+        SecurePrefs.save(this, url, token)
         bridge = ChatBridge(url, token)
         setLoggedIn(true)
         loadInbox()
@@ -209,11 +210,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadInbox(showLoading: Boolean = true) {
         val b = bridge ?: run { statusLabel.text = "Connect first."; return }
+        inboxJob?.cancel()
         if (showLoading) {
             loadingBar.visibility = View.VISIBLE
             statusLabel.text = if (allUsersMode) "Loading all users…" else "Loading users…"
         }
-        lifecycleScope.launch {
+        inboxJob = lifecycleScope.launch {
             try {
                 val convs = b.inbox()
                 val sorted = convs.sortedByDescending { it.lastMessageAt }
@@ -275,7 +277,6 @@ class MainActivity : AppCompatActivity() {
     private fun openChat(c: ChatBridge.Conversation) {
         val i = Intent(this, ChatActivity::class.java)
         i.putExtra("base_url", urlInput.text.toString().trim().trimEnd('/'))
-        i.putExtra("token", tokenInput.text.toString().trim())
         i.putExtra("conversation_id", c.id)
         i.putExtra("username", c.username.ifEmpty { c.userEmail })
         i.putExtra("ai_mode", c.aiMode)

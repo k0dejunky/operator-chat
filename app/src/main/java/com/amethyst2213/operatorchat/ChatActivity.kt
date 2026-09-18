@@ -90,7 +90,7 @@ class ChatActivity : AppCompatActivity() {
 
         conversationId = intent.getLongExtra("conversation_id", 0)
         val url = intent.getStringExtra("base_url") ?: ""
-        val token = intent.getStringExtra("token") ?: ""
+        val token = intent.getStringExtra("token") ?: SecurePrefs.token(this)
         val username = intent.getStringExtra("username") ?: "#$conversationId"
         supportActionBar?.title = username
 
@@ -433,7 +433,10 @@ class ChatActivity : AppCompatActivity() {
             }
             h.bubble.text = m.message.ifEmpty { "" }
             h.bubble.setBackgroundResource(if (mine) R.drawable.bubble_out else R.drawable.bubble_in)
-            h.bubble.setTextColor(if (mine) 0xFFFFFFFF.toInt() else 0xFF2E1065.toInt())
+            h.bubble.setTextColor(
+                if (mine) android.graphics.Color.WHITE
+                else androidx.core.content.ContextCompat.getColor(h.itemView.context, R.color.text),
+            )
 
             // Member/AI messages hug the left; operator messages hug the right.
             val gravity = if (mine) android.view.Gravity.END else android.view.Gravity.START

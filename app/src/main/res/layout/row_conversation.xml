@@ -13,7 +13,7 @@
         android:layout_height="wrap_content"
         android:textSize="15sp"
         android:textStyle="bold"
-        android:textColor="#4A044E" />
+        android:textColor="@color/text" />
 
     <TextView
         android:id="@+id/row_last"
@@ -31,5 +31,5 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
         android:textSize="11sp"
-        android:textColor="#9333EA" />
+        android:textColor="@color/purple" />
 </LinearLayout>

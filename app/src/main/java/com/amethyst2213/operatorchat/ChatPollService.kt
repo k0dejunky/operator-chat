@@ -32,8 +32,8 @@ class ChatPollService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIF_ID, buildNotification("Operator chat running"))
         val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
-        val url = prefs.getString("url", "")?.trim()?.trimEnd('/') ?: ""
-        val token = prefs.getString("token", "")?.trim() ?: ""
+        val url = SecurePrefs.url(this).trim().trimEnd('/')
+        val token = SecurePrefs.token(this).trim()
 
         job?.cancel()
         if (url.isNotEmpty() && token.isNotEmpty()) {
@@ -49,8 +49,9 @@ class ChatPollService : Service() {
 
     /** Primary: hold the SSE events stream open; notify as member messages arrive. */
     private suspend fun eventsPump(bridge: ChatBridge, seen: MutableMap<Long, Long>) {
-        var since = 0L
-        var primed = false
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        var since = prefs.getLong("events_since", 0L)
+        var primed = since > 0L
         while (scope.isActive) {
             try {
                 val events = bridge.eventsOnce(since)
@@ -59,6 +60,7 @@ class ChatPollService : Service() {
                         // First batch just primes the high-water marks.
                         events.forEach { seen[it.conversationId] = it.id }
                         since = events.maxOf { it.id }
+                        prefs.edit().putLong("events_since", since).apply()
                         primed = true
                         continue
                     }
@@ -73,6 +75,7 @@ class ChatPollService : Service() {
                         }
                     }
                     since = maxOf(since, events.maxOf { it.id })
+                    prefs.edit().putLong("events_since", since).apply()
                 }
             } catch (_: Exception) {
                 // stream dropped/reconnect; the poller covers the gap
@@ -167,7 +170,7 @@ class ChatPollService : Service() {
             .setContentText(ev.message.take(120))
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setAutoCancel(true)
-            .setContentIntent(openAppIntent())
+            .setContentIntent(openChatIntent(ev.conversationId))
         val tone = toneFor(ev.conversationId)
         if (tone != null) {
             builder.setSound(android.net.Uri.parse(tone))
@@ -188,11 +191,29 @@ class ChatPollService : Service() {
             .setContentText("${c.unreadReplyable} new message(s) — tap to open")
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setAutoCancel(true)
-            .setContentIntent(openAppIntent())
+            .setContentIntent(openChatIntent(c.id))
         if (tone != null) {
             builder.setSound(android.net.Uri.parse(tone))
         }
         NotificationManagerCompat.from(this).notify((1000 + c.id).toInt(), builder.build())
+    }
+
+    private fun openChatIntent(conversationId: Long): android.app.PendingIntent {
+        val i = Intent(this, ChatActivity::class.java).apply {
+            putExtra("base_url", SecurePrefs.url(this@ChatPollService))
+            putExtra("conversation_id", conversationId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return android.app.PendingIntent.getActivity(
+            this,
+            conversationId.toInt(),
+            i,
+            if (Build.VERSION.SDK_INT >= 23) {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            },
+        )
     }
 
     companion object {

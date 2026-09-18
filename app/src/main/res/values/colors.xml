@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple">#9333EA</color>
+    <color name="purple">#7C3AED</color>
+    <color name="purple_dark">#5B21B6</color>
+    <color name="purple_light">#EDE9FE</color>
     <color name="white">#FFFFFF</color>
-    <color name="pink_100">#FDF2F8</color>
-    <color name="text">#4A044E</color>
+    <color name="pink_100">#FFF7FC</color>
+    <color name="surface">#FFF7FC</color>
+    <color name="surface_card">#FFFFFF</color>
+    <color name="text">#24112F</color>
+    <color name="text_secondary">#6B5A73</color>
+    <color name="border">#E8DCEB</color>
 </resources>

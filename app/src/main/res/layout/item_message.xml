@@ -13,7 +13,7 @@
         android:layout_height="wrap_content"
         android:layout_marginBottom="1dp"
         android:textSize="10sp"
-        android:textColor="#A78BFA" />
+         android:textColor="@color/purple" />
 
     <LinearLayout
         android:id="@+id/bubble_row"
@@ -40,7 +40,7 @@
             android:layout_marginLeft="8dp"
             android:padding="6dp"
             android:textSize="13sp"
-            android:textColor="#6D28D9"
+             android:textColor="@color/purple"
             android:gravity="center_vertical"
             android:visibility="gone" />
     </LinearLayout>

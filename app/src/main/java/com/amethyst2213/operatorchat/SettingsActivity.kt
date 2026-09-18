@@ -98,7 +98,7 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         updateLabel.text = "Checking for updates…"
-        val token = prefs.getString("token", "") ?: ""
+        val token = SecurePrefs.token(this)
         lifecycleScope.launch {
             val v = ChatBridge(baseUrl, token).checkForUpdate()
             if (v == null) {
