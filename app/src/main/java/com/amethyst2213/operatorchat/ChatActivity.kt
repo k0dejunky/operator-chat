@@ -43,6 +43,9 @@ class ChatActivity : AppCompatActivity() {
     private var bridge: ChatBridge? = null
     private var conversationId: Long = 0
     private var latestId = 0L
+    private var oldestId = 0L
+    private var hasMore = false
+    private var loadingOlder = false
     private var pendingPlaceholderId = 0L
     private val messages = mutableListOf<ChatBridge.Message>()
     private lateinit var adapter: MessageAdapter
@@ -107,6 +110,14 @@ class ChatActivity : AppCompatActivity() {
         recycler.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         adapter = MessageAdapter(messages)
         recycler.adapter = adapter
+
+        // Lazy-load older messages when the user scrolls to the top.
+        recycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                val lm = rv.layoutManager as? LinearLayoutManager ?: return
+                if (lm.findFirstVisibleItemPosition() <= 2) loadOlder()
+            }
+        })
 
         // Emoji quick-bar
         emojiBar.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
@@ -237,11 +248,13 @@ class ChatActivity : AppCompatActivity() {
         streamJob?.cancel()
         streamJob = lifecycleScope.launch {
             try {
-                // Initial full load.
+                // Initial full load (latest 50).
                 val hist = bridge?.thread(conversationId) ?: emptyList()
                 messages.clear()
                 messages.addAll(hist)
                 latestId = hist.maxOfOrNull { it.id } ?: 0L
+                oldestId = hist.firstOrNull()?.id ?: 0L
+                hasMore = hist.size >= 50
                 adapter.notifyDataSetChanged()
                 statusLabel.text = "Live"
                 // Reading the thread clears its new-message state.
@@ -265,6 +278,41 @@ class ChatActivity : AppCompatActivity() {
                     statusLabel.text = "Reconnecting…"
                     delay(1500)
                 }
+            }
+        }
+    }
+
+    /** Load the previous batch of older messages and prepend them. */
+    private fun loadOlder() {
+        if (loadingOlder || !hasMore || oldestId <= 0) return
+        loadingOlder = true
+        val b = bridge ?: return
+        lifecycleScope.launch {
+            try {
+                val (older, more) = b.history(conversationId, oldestId, 50)
+                if (older.isNotEmpty()) {
+                    // Keep scroll anchored: record position before inserting.
+                    val lm = recycler.layoutManager as? LinearLayoutManager
+                    val pos = lm?.findFirstVisibleItemPosition() ?: 0
+                    val firstVisible = lm?.findViewByPosition(pos)
+                    val offset = firstVisible?.top ?: 0
+
+                    messages.addAll(0, older)
+                    oldestId = older.first().id
+                    hasMore = more
+                    adapter.notifyItemRangeInserted(0, older.size)
+
+                    // Restore the view position after the insertion.
+                    recycler.post {
+                        lm?.scrollToPositionWithOffset(pos + older.size, offset)
+                    }
+                } else {
+                    hasMore = false
+                }
+            } catch (_: Exception) {
+                // transient; allow retry on next scroll
+            } finally {
+                loadingOlder = false
             }
         }
     }

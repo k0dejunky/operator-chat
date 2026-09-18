@@ -153,7 +153,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         }
     }
 
-    /** GET /webhooks/chat/thread?conversation=ID — full message history. */
+    /** GET /webhooks/chat/thread?conversation=ID — most recent 50 messages. */
     suspend fun thread(conversationId: Long): List<Message> = withContext(Dispatchers.IO) {
         val req = authed().url("$baseUrl/webhooks/chat/thread?conversation=$conversationId").get().build()
         client.newCall(req).execute().use { resp ->
@@ -162,6 +162,26 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             parseMessages(json.optJSONArray("messages"), conversationId)
         }
     }
+
+    /**
+     * GET /webhooks/chat/history — batch of older messages (id < before),
+     * oldest-first. Returns a pair of (messages, hasMore).
+     */
+    suspend fun history(conversationId: Long, before: Long, limit: Int = 50): Pair<List<Message>, Boolean> =
+        withContext(Dispatchers.IO) {
+            val req = authed()
+                .url("$baseUrl/webhooks/chat/history?conversation=$conversationId&before=$before&limit=$limit")
+                .get()
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
+                val json = JSONObject(resp.body?.string().orEmpty())
+                Pair(
+                    parseMessages(json.optJSONArray("messages"), conversationId),
+                    json.optBoolean("has_more", false),
+                )
+            }
+        }
 
     /**
      * Server-Sent Events stream for real-time updates. Returns as soon as the
