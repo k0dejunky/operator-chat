@@ -72,8 +72,16 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     )
 
     /** GET /webhooks/chat/inbox — all conversations (no chat id needed). */
-    suspend fun inbox(): List<Conversation> = withContext(Dispatchers.IO) {
-        val req = authed().url("$baseUrl/webhooks/chat/inbox").get().build()
+    suspend fun inbox(query: String = "", cursor: String? = null, limit: Int = 50): List<Conversation> = withContext(Dispatchers.IO) {
+        val url = okhttp3.HttpUrl.Builder().scheme(if (baseUrl.startsWith("https")) "https" else "http")
+            .host(android.net.Uri.parse(baseUrl).host.orEmpty())
+            .addPathSegments(android.net.Uri.parse(baseUrl).path.orEmpty().trim('/'))
+            .addPathSegment("webhooks").addPathSegment("chat").addPathSegment("inbox")
+            .addQueryParameter("limit", limit.toString())
+            .apply { if (query.isNotBlank()) addQueryParameter("q", query) }
+            .apply { if (!cursor.isNullOrBlank()) addQueryParameter("cursor", cursor) }
+            .build()
+        val req = authed().url(url).get().build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
             val json = JSONObject(resp.body?.string().orEmpty())
@@ -261,9 +269,10 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      *
      * @return the new message id, or 0 on failure.
      */
-    suspend fun reply(conversationId: Long, message: String, attachment: File? = null): Long =
+    suspend fun reply(conversationId: Long, message: String, attachment: File? = null, idempotencyKey: String? = null): Long =
         withContext(Dispatchers.IO) {
             val reqBuilder = authed().url("$baseUrl/webhooks/chat/reply")
+            if (!idempotencyKey.isNullOrBlank()) reqBuilder.header("Idempotency-Key", idempotencyKey)
 
             val body: RequestBody
             if (attachment != null) {

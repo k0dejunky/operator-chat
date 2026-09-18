@@ -10,6 +10,8 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.text.Editable
+import android.text.TextWatcher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -23,6 +25,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URLDecoder
+import java.util.UUID
 
 /**
  * Messenger-style chat thread. Bottom-fixed reply bar with emoji + attachment
@@ -82,13 +85,21 @@ class ChatActivity : AppCompatActivity() {
         attachButton = findViewById(R.id.attach_button)
         emojiBar = findViewById(R.id.emoji_bar)
         statusLabel = findViewById(R.id.chat_status)
+        conversationId = intent.getLongExtra("conversation_id", 0)
+        input.setText(prefs.getString("draft_$conversationId", "").orEmpty())
+        input.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                prefs.edit().putString("draft_$conversationId", s?.toString().orEmpty()).apply()
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
 
         val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.chat_toolbar)
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         StatusBarToolbar.apply(this, toolbar)
 
-        conversationId = intent.getLongExtra("conversation_id", 0)
         val url = intent.getStringExtra("base_url") ?: ""
         val token = intent.getStringExtra("token") ?: SecurePrefs.token(this)
         val username = intent.getStringExtra("username") ?: "#$conversationId"
@@ -321,6 +332,10 @@ class ChatActivity : AppCompatActivity() {
         val text = input.text.toString().trim()
         val pending = pendingAttachment
         if (text.isEmpty() && pending == null) return
+        val idempotencyKey = prefs.getString("pending_reply_key_$conversationId", null)
+            ?: UUID.randomUUID().toString().also {
+                prefs.edit().putString("pending_reply_key_$conversationId", it).apply()
+            }
         input.setText("")
         pendingAttachment = null
 
@@ -346,8 +361,9 @@ class ChatActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                val id = bridge?.reply(conversationId, text, pending) ?: 0
+                val id = bridge?.reply(conversationId, text, pending, idempotencyKey) ?: 0
                 if (id > 0) {
+                    prefs.edit().remove("draft_$conversationId").remove("pending_reply_key_$conversationId").apply()
                     if (pending != null) {
                         // Attachment sent: reload the thread so the real message
                         // (with image/thumb URLs) renders inline instead of the
@@ -369,14 +385,18 @@ class ChatActivity : AppCompatActivity() {
                     }
                     statusLabel.text = "Sent"
                 } else {
-                    statusLabel.text = "Reply failed"
                     messages.removeAll { it.id == placeholderId }
                     adapter.notifyDataSetChanged()
+                    pendingAttachment = pending
+                    input.setText(text)
+                    statusLabel.text = "Reply failed — tap Send to retry"
                 }
             } catch (e: Exception) {
-                statusLabel.text = "Send error: ${e.message}"
+                statusLabel.text = "Send error — tap Send to retry"
                 messages.removeAll { it.id == placeholderId }
                 adapter.notifyDataSetChanged()
+                pendingAttachment = pending
+                input.setText(text)
             }
         }
     }

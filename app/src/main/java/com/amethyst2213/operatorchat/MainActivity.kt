@@ -17,6 +17,8 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.text.Editable
+import android.text.TextWatcher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
@@ -42,12 +44,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var inboxRecycler: RecyclerView
     private lateinit var emptyLabel: TextView
     private lateinit var loadingBar: ProgressBar
+    private lateinit var searchInput: EditText
 
     private var bridge: ChatBridge? = null
     private val conversations = mutableListOf<ChatBridge.Conversation>()
     private var allUsersMode = false
     private var refreshJob: Job? = null
     private var inboxJob: Job? = null
+    private var searchJob: Job? = null
 
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -77,11 +81,23 @@ class MainActivity : AppCompatActivity() {
         inboxRecycler = findViewById(R.id.inbox_recycler)
         emptyLabel = findViewById(R.id.empty_label)
         loadingBar = findViewById(R.id.loading_bar)
+        searchInput = findViewById(R.id.search_input)
 
         inboxRecycler.layoutManager = LinearLayoutManager(this)
         inboxRecycler.adapter = InboxAdapter(conversations) { openChat(it) }
 
         connectButton.setOnClickListener { connect() }
+        searchInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                searchJob?.cancel()
+                searchJob = lifecycleScope.launch {
+                    delay(250)
+                    if (bridge != null) loadInbox(showLoading = false)
+                }
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
 
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -110,6 +126,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         inboxJob?.cancel()
+        searchJob?.cancel()
         stopRefreshLoop()
         try { unregisterReceiver(chatEventReceiver) } catch (_: Exception) {}
         super.onDestroy()
@@ -149,6 +166,7 @@ class MainActivity : AppCompatActivity() {
             }
             R.id.action_logout -> {
                 SecurePrefs.clear(this)
+                searchInput.setText("")
                 bridge = null
                 conversations.clear()
                 inboxRecycler.adapter?.notifyDataSetChanged()
@@ -217,7 +235,7 @@ class MainActivity : AppCompatActivity() {
         }
         inboxJob = lifecycleScope.launch {
             try {
-                val convs = b.inbox()
+                val convs = b.inbox(searchInput.text.toString().trim())
                 val sorted = convs.sortedByDescending { it.lastMessageAt }
                 val displayed = if (allUsersMode) {
                     // Most recent 25 unique users, favourites first.
