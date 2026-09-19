@@ -41,6 +41,17 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val memberCount: Int,
         val unreadReplyable: Int,
         val updatedAt: String,
+        val memberReplyEnabled: Boolean = true,
+        val canChat: Boolean = false,
+    )
+
+    data class UserResult(
+        val id: Long,
+        val email: String,
+        val username: String,
+        val canChat: Boolean,
+        val conversationId: Long?,
+        val memberReplyEnabled: Boolean,
     )
 
     data class ChatEvent(
@@ -102,8 +113,69 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                     memberCount = c.optInt("member_count", 0),
                     unreadReplyable = c.optInt("unread_replyable", 0),
                     updatedAt = c.optString("updated_at", ""),
+                    memberReplyEnabled = c.optInt("member_reply_enabled", 1) == 1,
+                    canChat = c.optInt("can_chat", 0) == 1,
                 )
             }
+        }
+    }
+
+    /** GET /webhooks/chat/users?q= — search users the operator can message. */
+    suspend fun searchUsers(query: String): List<UserResult> = withContext(Dispatchers.IO) {
+        val url = okhttp3.HttpUrl.Builder().scheme(if (baseUrl.startsWith("https")) "https" else "http")
+            .host(android.net.Uri.parse(baseUrl).host.orEmpty())
+            .addPathSegments(android.net.Uri.parse(baseUrl).path.orEmpty().trim('/'))
+            .addPathSegment("webhooks").addPathSegment("chat").addPathSegment("users")
+            .addQueryParameter("q", query)
+            .build()
+        val req = authed().url(url).get().build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
+            val json = JSONObject(resp.body?.string().orEmpty())
+            val arr = json.optJSONArray("users") ?: JSONArray()
+            (0 until arr.length()).map { i ->
+                val u = arr.getJSONObject(i)
+                UserResult(
+                    id = u.optLong("id", 0),
+                    email = u.optString("email", ""),
+                    username = u.optString("username", "").ifEmpty { u.optString("email", "").substringBefore("@") },
+                    canChat = u.optInt("can_chat", 0) == 1,
+                    conversationId = if (u.isNull("conversation_id") || u.optLong("conversation_id", 0) == 0L) null else u.optLong("conversation_id"),
+                    memberReplyEnabled = u.optInt("member_reply_enabled", 1) == 1,
+                )
+            }
+        }
+    }
+
+    /** POST /webhooks/chat/start — open (or reuse) a user's conversation. */
+    suspend fun startConversation(userId: Long): Pair<Long, String> = withContext(Dispatchers.IO) {
+        val payload = JSONObject().put("user_id", userId)
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/start")
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        client.newCall(req).execute().use { resp ->
+            val json = JSONObject(resp.body?.string().orEmpty())
+            if (!json.optBoolean("ok", false)) throw RuntimeException(json.optString("error", "Could not start conversation"))
+            json.optLong("conversation_id", 0) to json.optString("username", "")
+        }
+    }
+
+    /** POST /webhooks/chat/reply-toggle — enable/disable member replies. */
+    suspend fun setMemberReply(conversationId: Long, enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val payload = JSONObject()
+            .put("conversation_id", conversationId)
+            .put("enabled", enabled)
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/reply-toggle")
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        try {
+            client.newCall(req).execute().use { resp ->
+                JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 

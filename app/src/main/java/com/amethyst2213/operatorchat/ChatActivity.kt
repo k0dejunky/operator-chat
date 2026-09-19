@@ -49,6 +49,7 @@ class ChatActivity : AppCompatActivity() {
     private var oldestId = 0L
     private var hasMore = false
     private var loadingOlder = false
+    private var memberReplyEnabled = true
     private var pendingPlaceholderId = 0L
     private val messages = mutableListOf<ChatBridge.Message>()
     private lateinit var adapter: MessageAdapter
@@ -86,6 +87,7 @@ class ChatActivity : AppCompatActivity() {
         emojiBar = findViewById(R.id.emoji_bar)
         statusLabel = findViewById(R.id.chat_status)
         conversationId = intent.getLongExtra("conversation_id", 0)
+        memberReplyEnabled = intent.getBooleanExtra("member_reply_enabled", true)
         input.setText(prefs.getString("draft_$conversationId", "").orEmpty())
         input.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -190,6 +192,7 @@ class ChatActivity : AppCompatActivity() {
         val options = arrayOf(
             "★ Favourite: ${if (isFav) "ON" else "OFF"}",
             "Chat mode: ${labels[checked]}",
+            "Member replies: ${if (memberReplyEnabled) "ON" else "OFF"}",
             "Notifications: ${if (notifyOn) "ON" else "OFF"}",
             "Notification tone: ${if (tone.isEmpty()) "Default" else tone.substringAfterLast('/')}"
         )
@@ -203,11 +206,24 @@ class ChatActivity : AppCompatActivity() {
                     }
                     1 -> pickMode(modes, labels, checked, b)
                     2 -> {
+                        statusLabel.text = "Updating…"
+                        val target = !memberReplyEnabled
+                        lifecycleScope.launch {
+                            val ok = b.setMemberReply(conversationId, target)
+                            statusLabel.text = if (ok) "Member replies " + (if (target) "enabled" else "disabled") else "Reply toggle failed"
+                            if (ok) {
+                                memberReplyEnabled = target
+                                intent.putExtra("member_reply_enabled", target)
+                            }
+                            showChatSettings()
+                        }
+                    }
+                    3 -> {
                         val on = !notifyOn
                         prefs.edit().putBoolean("${chatKey}_notify", on).apply()
                         showChatSettings()
                     }
-                    3 -> pickChatTone(chatKey)
+                    4 -> pickChatTone(chatKey)
                 }
             }
             .setPositiveButton("Done", null)

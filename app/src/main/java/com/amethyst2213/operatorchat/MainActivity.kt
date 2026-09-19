@@ -1,6 +1,7 @@
 package com.amethyst2213.operatorchat
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -12,9 +13,11 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.text.Editable
@@ -154,6 +157,10 @@ class MainActivity : AppCompatActivity() {
                 allUsersMode = false
                 supportActionBar?.setTitle("Users list")
                 loadInbox()
+                true
+            }
+            R.id.action_new_chat -> {
+                showNewChatDialog()
                 true
             }
             R.id.action_settings -> {
@@ -298,7 +305,90 @@ class MainActivity : AppCompatActivity() {
         i.putExtra("conversation_id", c.id)
         i.putExtra("username", c.username.ifEmpty { c.userEmail })
         i.putExtra("ai_mode", c.aiMode)
+        i.putExtra("member_reply_enabled", c.memberReplyEnabled)
         startActivity(i)
+    }
+
+    /** Open a conversation by id (used after starting a chat with a user). */
+    private fun openChatById(conversationId: Long, username: String) {
+        val i = Intent(this, ChatActivity::class.java)
+        i.putExtra("base_url", urlInput.text.toString().trim().trimEnd('/'))
+        i.putExtra("conversation_id", conversationId)
+        i.putExtra("username", username)
+        startActivity(i)
+    }
+
+    /** Search users and start a new conversation with any of them. */
+    private fun showNewChatDialog() {
+        val b = bridge ?: run { statusLabel.text = "Connect first."; return }
+
+        val search = EditText(this).apply {
+            hint = "Search users by email…"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+        }
+        val list = ListView(this)
+        val pad = (12 * resources.displayMetrics.density).toInt()
+        search.setPadding(pad, pad, pad, pad)
+        list.setPadding(0, 0, 0, 0)
+        val results = mutableListOf<ChatBridge.UserResult>()
+        val adapter = object : ArrayAdapter<ChatBridge.UserResult>(this, android.R.layout.simple_list_item_2, android.R.id.text1, results) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = super.getView(position, convertView, parent)
+                val u = getItem(position) ?: return v
+                val t1 = v.findViewById<TextView>(android.R.id.text1)
+                val t2 = v.findViewById<TextView>(android.R.id.text2)
+                t1?.text = u.username
+                t2?.text = u.email + (if (u.canChat) " · chat enabled" else " · no chat plan")
+                return v
+            }
+        }
+        list.adapter = adapter
+
+        var searchJob: Job? = null
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                searchJob?.cancel()
+                val q = s?.toString()?.trim().orEmpty()
+                if (q.length < 2) { results.clear(); adapter.notifyDataSetChanged(); return }
+                searchJob = lifecycleScope.launch {
+                    try {
+                        val found = b.searchUsers(q)
+                        results.clear()
+                        results.addAll(found)
+                        adapter.notifyDataSetChanged()
+                    } catch (_: Exception) {
+                        statusLabel.text = "User search failed — check connection."
+                    }
+                }
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+
+        list.setOnItemClickListener { _, _, position, _ ->
+            val user = adapter.getItem(position) ?: return@setOnItemClickListener
+            statusLabel.text = "Opening chat with ${user.username}…"
+            lifecycleScope.launch {
+                try {
+                    val (cid, username) = b.startConversation(user.id)
+                    if (cid > 0) openChatById(cid, username.ifEmpty { user.username })
+                } catch (e: Exception) {
+                    statusLabel.text = "Could not start chat: ${e.message}"
+                }
+            }
+        }
+
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(search)
+            addView(list, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Message any user")
+            .setView(content)
+            .setNegativeButton("Close", null)
+            .create()
+            .show()
     }
 
     // ---------------------------------------------------------------- adapter
