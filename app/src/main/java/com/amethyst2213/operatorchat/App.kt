@@ -3,18 +3,22 @@ package com.amethyst2213.operatorchat
 import android.app.Application
 import android.os.Environment
 import android.util.Log
+import coil.Coil
+import coil.ImageLoader
+import okhttp3.OkHttpClient
 import java.io.File
 import java.io.FileWriter
 
 /**
- * App-level uncaught exception handler: writes crashes to a log file in the
- * app's external files dir and keeps the process from silently dying without
- * any trace (helps diagnose device-side issues).
+ * App-level setup: an uncaught exception handler (writes crashes to a log
+ * file) and an authenticated Coil image loader so attachment thumbnails are
+ * fetched with the bridge Bearer token and cached in memory + disk.
  */
 class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
@@ -31,6 +35,23 @@ class App : Application() {
                 defaultHandler?.uncaughtException(thread, throwable)
             }
         }
+
+        // Coil loader that attaches the operator token to every media request
+        // (attachments are Bearer-protected) and caches thumbnails on disk.
+        val client = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val token = SecurePrefs.token(this@App)
+                val builder = chain.request().newBuilder()
+                if (token.isNotEmpty()) {
+                    builder.header("Authorization", "Bearer $token")
+                }
+                chain.proceed(builder.build())
+            }
+            .build()
+
+        Coil.setImageLoader(
+            ImageLoader.Builder(this).okHttpClient(client).build()
+        )
     }
 
     companion object {

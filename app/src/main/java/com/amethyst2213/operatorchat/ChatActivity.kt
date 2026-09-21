@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import coil.load
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Job
@@ -494,9 +495,8 @@ class ChatActivity : AppCompatActivity() {
 
             if (m.attachmentName != null) {
                 if (m.attachmentThumbUrl != null) {
-                    // Image attachment: show thumbnail, tap to open full size.
+                    // Image attachment: show thumbnail (Coil caches it), tap to open full size.
                     h.image.visibility = View.VISIBLE
-                    h.image.setTag(m.id)
                     loadThumb(m, h.image)
                     h.image.setOnClickListener { openFullImage(m) }
                     h.attach.visibility = View.GONE
@@ -510,18 +510,11 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    /** Load an attachment thumbnail through Coil (memory + disk cached). */
     private fun loadThumb(m: ChatBridge.Message, iv: android.widget.ImageView) {
         val b = bridge ?: return
-        lifecycleScope.launch {
-            val f = File(cacheDir, "thumb_${m.id}.jpg")
-            val dl = b.download(m.attachmentThumbUrl ?: return@launch, f)
-            if (dl != null && iv.getTag() == m.id) {
-                try {
-                    val bmp = android.graphics.BitmapFactory.decodeFile(dl.absolutePath)
-                    iv.setImageBitmap(bmp)
-                } catch (_: Exception) { /* ignore decode error */ }
-            }
-        }
+        val url = b.resolveUrl(m.attachmentThumbUrl ?: return)
+        iv.load(url)
     }
 
     private fun openFullImage(m: ChatBridge.Message) {

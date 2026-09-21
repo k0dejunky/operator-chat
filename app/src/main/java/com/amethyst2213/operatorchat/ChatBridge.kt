@@ -43,6 +43,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val updatedAt: String,
         val memberReplyEnabled: Boolean = true,
         val canChat: Boolean = false,
+        val favorite: Boolean = false,
     )
 
     data class UserResult(

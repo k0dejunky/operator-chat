@@ -27,7 +27,9 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -50,11 +52,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var searchInput: EditText
 
     private var bridge: ChatBridge? = null
-    private val conversations = mutableListOf<ChatBridge.Conversation>()
     private var allUsersMode = false
     private var refreshJob: Job? = null
     private var inboxJob: Job? = null
     private var searchJob: Job? = null
+    private var resumed = false
 
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -87,7 +89,7 @@ class MainActivity : AppCompatActivity() {
         searchInput = findViewById(R.id.search_input)
 
         inboxRecycler.layoutManager = LinearLayoutManager(this)
-        inboxRecycler.adapter = InboxAdapter(conversations) { openChat(it) }
+        inboxRecycler.adapter = InboxAdapter { openChat(it) }
 
         connectButton.setOnClickListener { connect() }
         searchInput.addTextChangedListener(object : TextWatcher {
@@ -123,8 +125,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        resumed = true
         // Refresh when returning from a chat: reading/reply clears unread.
-        if (bridge != null) loadInbox(showLoading = false)
+        if (bridge != null) {
+            loadInbox(showLoading = false)
+            startRefreshLoop()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Stop the gentle inbox poll when the screen is not visible to save
+        // battery; SSE broadcasts + resume refresh keep badges current.
+        resumed = false
+        stopRefreshLoop()
     }
 
     override fun onDestroy() {
@@ -175,8 +189,7 @@ class MainActivity : AppCompatActivity() {
                 SecurePrefs.clear(this)
                 searchInput.setText("")
                 bridge = null
-                conversations.clear()
-                inboxRecycler.adapter?.notifyDataSetChanged()
+                (inboxRecycler.adapter as? InboxAdapter)?.submitList(emptyList())
                 emptyLabel.visibility = View.GONE
                 setLoggedIn(false)
                 stopRefreshLoop()
@@ -231,6 +244,7 @@ class MainActivity : AppCompatActivity() {
         bridge = ChatBridge(url, token)
         setLoggedIn(true)
         loadInbox()
+        startRefreshLoop()
     }
 
     private fun loadInbox(showLoading: Boolean = true) {
@@ -256,9 +270,8 @@ class MainActivity : AppCompatActivity() {
                     val rest = withUnread.filter { !Favorites.isFavorite(this@MainActivity, it.id) }
                     (fav + rest).distinctBy { it.id }
                 }
-                conversations.clear()
-                conversations.addAll(displayed)
-                inboxRecycler.adapter?.notifyDataSetChanged()
+                val withFav = displayed.map { it.copy(favorite = Favorites.isFavorite(this@MainActivity, it.id)) }
+                (inboxRecycler.adapter as? InboxAdapter)?.submitList(withFav)
                 emptyLabel.visibility = if (displayed.isEmpty()) View.VISIBLE else View.GONE
                 statusLabel.text = when {
                     displayed.isEmpty() && allUsersMode -> "No users yet."
@@ -266,7 +279,6 @@ class MainActivity : AppCompatActivity() {
                     allUsersMode -> "Recent ${displayed.size} user(s)"
                     else -> "${displayed.size} user(s) with new messages"
                 }
-                startRefreshLoop()
                 try {
                     val si = Intent(this@MainActivity, ChatPollService::class.java)
                     if (Build.VERSION.SDK_INT >= 26) startForegroundService(si) else startService(si)
@@ -283,12 +295,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Poll the inbox every few seconds so new-message badges appear live. */
+    /** Gentle background badge refresh, only while the screen is visible. */
     private fun startRefreshLoop() {
-        if (refreshJob?.isActive == true) return
+        if (refreshJob?.isActive == true || !resumed) return
         refreshJob = lifecycleScope.launch {
             while (true) {
-                delay(5000)
+                delay(30000)
                 loadInbox(showLoading = false)
             }
         }
@@ -393,9 +405,8 @@ class MainActivity : AppCompatActivity() {
 
     // ---------------------------------------------------------------- adapter
     inner class InboxAdapter(
-        private val data: List<ChatBridge.Conversation>,
         private val onClick: (ChatBridge.Conversation) -> Unit,
-    ) : RecyclerView.Adapter<InboxAdapter.Holder>() {
+    ) : ListAdapter<ChatBridge.Conversation, InboxAdapter.Holder>(INBOX_DIFF) {
 
         inner class Holder(v: View) : RecyclerView.ViewHolder(v) {
             val title: TextView = v.findViewById(R.id.row_title)
@@ -409,12 +420,10 @@ class MainActivity : AppCompatActivity() {
             return Holder(v)
         }
 
-        override fun getItemCount() = data.size
-
         override fun onBindViewHolder(h: Holder, position: Int) {
-            val c = data[position]
+            val c = getItem(position)
             h.title.text = c.username.ifEmpty { c.userEmail }
-            h.star.text = if (Favorites.isFavorite(this@MainActivity, c.id)) "★" else "☆"
+            h.star.text = if (c.favorite) "★" else "☆"
             h.star.setOnClickListener {
                 Favorites.toggle(this@MainActivity, c.id)
                 loadInbox()
@@ -432,5 +441,22 @@ class MainActivity : AppCompatActivity() {
             }
             h.itemView.setOnClickListener { onClick(c) }
         }
+    }
+
+    private object INBOX_DIFF : DiffUtil.ItemCallback<ChatBridge.Conversation>() {
+        override fun areItemsTheSame(a: ChatBridge.Conversation, b: ChatBridge.Conversation): Boolean =
+            a.id == b.id
+
+        override fun areContentsTheSame(a: ChatBridge.Conversation, b: ChatBridge.Conversation): Boolean =
+            a.id == b.id
+                && a.username == b.username
+                && a.userEmail == b.userEmail
+                && a.lastMessage == b.lastMessage
+                && a.lastSender == b.lastSender
+                && a.lastMessageAt == b.lastMessageAt
+                && a.unreadReplyable == b.unreadReplyable
+                && a.memberReplyEnabled == b.memberReplyEnabled
+                && a.canChat == b.canChat
+                && a.favorite == b.favorite
     }
 }

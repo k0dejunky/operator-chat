@@ -4,8 +4,11 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import kotlinx.coroutines.CoroutineScope
@@ -14,18 +17,25 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 /**
  * Background notifier for the operator. Primary path: a Server-Sent Events
  * stream (/webhooks/chat/events) pushes new member messages the moment they
- * arrive, so notifications are near-instant. Fallback: a 10s inbox poller
- * catches anything the stream missed. Both share a per-conversation
- * high-water mark so nothing notifies twice.
+ * arrive, so notifications are near-instant. Fallback: a low-frequency,
+ * adaptive inbox poller that only runs while the stream is unhealthy and
+ * backs off (30s → 5min) to stay battery-friendly. In Doze/battery-saver it
+ * idles instead of polling, and metered networks get the slowest interval.
+ * Both share a per-conversation high-water mark so nothing notifies twice.
  */
 class ChatPollService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO)
     private var job: Job? = null
+
+    /** True when the SSE stream delivered a batch successfully recently. */
+    @Volatile
+    private var streamHealthy = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -52,9 +62,12 @@ class ChatPollService : Service() {
         val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
         var since = prefs.getLong("events_since", 0L)
         var primed = since > 0L
+        var backoffMs = 3000L
         while (scope.isActive) {
             try {
                 val events = bridge.eventsOnce(since)
+                streamHealthy = true
+                backoffMs = 3000L
                 if (events.isNotEmpty()) {
                     if (!primed) {
                         // First batch just primes the high-water marks.
@@ -78,20 +91,37 @@ class ChatPollService : Service() {
                     prefs.edit().putLong("events_since", since).apply()
                 }
             } catch (_: Exception) {
-                // stream dropped/reconnect; the poller covers the gap
-                delay(3000)
+                // Stream dropped/reconnect: back off with jitter so the radio
+                // is not hammered; the adaptive fallback covers the gap.
+                streamHealthy = false
+                delay(backoffMs + Random.nextLong(0, 2000))
+                backoffMs = minOf(backoffMs * 2, 30000L)
             }
         }
     }
 
-    /** Fallback: poll the inbox every 10s in case the stream was disconnected. */
+    /**
+     * Fallback: only polls while the SSE stream is unhealthy, starting at 30s
+     * and backing off to 5min. While the stream is healthy (or the device is
+     * Dozing / on a metered network) it idles so it costs almost nothing.
+     */
     private suspend fun pollFallback(bridge: ChatBridge, seen: MutableMap<Long, Long>) {
-        var primed = false
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        var primed = prefs.getLong("events_since", 0L) > 0L
+        var backoffMs = 30000L
         while (scope.isActive) {
+            // Healthy stream pushes live; nothing to catch up.
+            if (streamHealthy || isPowerConstrained()) {
+                delay(300000L)
+                continue
+            }
+            val interval = if (isMetered()) 300000L else backoffMs
             try {
                 val convs = bridge.inbox()
                 for (c in convs) {
                     if (!notifyEnabledFor(c.id)) continue
+                    if (c.unreadReplyable <= 0 && primed) continue
+                    // Fetch the thread only for conversations that changed.
                     val msgs = bridge.thread(c.id)
                     val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
                     val last = seen[c.id] ?: 0L
@@ -105,11 +135,26 @@ class ChatPollService : Service() {
                     }
                 }
                 primed = true
+                backoffMs = 30000L
             } catch (_: Exception) {
-                // transient; retry
+                backoffMs = minOf(backoffMs * 2, 300000L)
             }
-            delay(10000)
+            delay(interval + Random.nextLong(0, 5000))
         }
+    }
+
+    /** True when the device is Dozing or in battery-saver (skip polling). */
+    private fun isPowerConstrained(): Boolean {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        return pm.isPowerSaveMode || (Build.VERSION.SDK_INT >= 23 && pm.isDeviceIdleMode)
+    }
+
+    /** True when the active network is metered (use the slowest interval). */
+    private fun isMetered(): Boolean {
+        val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        @Suppress("DEPRECATION")
+        val net = cm.activeNetwork ?: return false
+        return cm.getNetworkCapabilities(net)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) == false
     }
 
     private fun notifyEnabledFor(conversationId: Long): Boolean {
