@@ -34,6 +34,11 @@
             android:name=".SettingsActivity"
             android:exported="false" />
 
+        <activity
+            android:name=".MediaViewerActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
         <service
             android:name=".ChatPollService"
             android:exported="false"

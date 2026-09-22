@@ -189,14 +189,14 @@ class ChatPollService : Service() {
         } else 22 * 60
     }
 
-    private fun mutePendingIntent(conversationId: Long): android.app.PendingIntent {
+    private fun actionPendingIntent(action: String, conversationId: Long): android.app.PendingIntent {
         val i = Intent(this, ChatActionReceiver::class.java).apply {
-            action = ChatActionReceiver.ACTION_MUTE
+            this.action = action
             putExtra("conversation_id", conversationId)
         }
         return android.app.PendingIntent.getBroadcast(
             this,
-            conversationId.toInt(),
+            (conversationId + action.hashCode()).toInt(),
             i,
             if (Build.VERSION.SDK_INT >= 23) {
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
@@ -205,6 +205,24 @@ class ChatPollService : Service() {
             },
         )
     }
+
+    private fun replyAction(conversationId: Long): NotificationCompat.Action {
+        val pi = actionPendingIntent(ChatActionReceiver.ACTION_REPLY, conversationId)
+        val remoteInput = androidx.core.app.RemoteInput.Builder(ChatActionReceiver.EXTRA_REPLY_TEXT)
+            .setLabel("Reply")
+            .build()
+        return NotificationCompat.Action.Builder(
+            android.R.drawable.ic_menu_send,
+            "Reply",
+            pi,
+        ).addRemoteInput(remoteInput).build()
+    }
+
+    private fun mutePendingIntent(conversationId: Long): android.app.PendingIntent =
+        actionPendingIntent(ChatActionReceiver.ACTION_MUTE, conversationId)
+
+    private fun markReadPendingIntent(conversationId: Long): android.app.PendingIntent =
+        actionPendingIntent(ChatActionReceiver.ACTION_MARK_READ, conversationId)
 
     /** Tell MainActivity to refresh badges immediately. */
     private fun broadcastRefresh() {
@@ -257,7 +275,10 @@ class ChatPollService : Service() {
         if (tone != null && !quietNow()) {
             builder.setSound(android.net.Uri.parse(tone))
         }
-        builder.addAction(0, "Mute", mutePendingIntent(ev.conversationId))
+        builder.setGroup("operator_chat")
+            .addAction(replyAction(ev.conversationId))
+            .addAction(0, "Mark read", markReadPendingIntent(ev.conversationId))
+            .addAction(0, "Mute", mutePendingIntent(ev.conversationId))
         NotificationManagerCompat.from(this).notify((1000 + ev.conversationId).toInt(), builder.build())
     }
 
@@ -278,7 +299,10 @@ class ChatPollService : Service() {
         if (tone != null && !quietNow()) {
             builder.setSound(android.net.Uri.parse(tone))
         }
-        builder.addAction(0, "Mute", mutePendingIntent(c.id))
+        builder.setGroup("operator_chat")
+            .addAction(replyAction(c.id))
+            .addAction(0, "Mark read", markReadPendingIntent(c.id))
+            .addAction(0, "Mute", mutePendingIntent(c.id))
         NotificationManagerCompat.from(this).notify((1000 + c.id).toInt(), builder.build())
     }
 

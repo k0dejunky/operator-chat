@@ -11,6 +11,7 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -349,19 +350,25 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     /**
      * POST /webhooks/chat/reply — send an operator reply, optionally with a
      * file attachment (image / video / text). Uses multipart when a file is
-     * present so the server stores it as an attachment.
+     * present so the server stores it as an attachment. Upload progress is
+     * reported to onProgress (0..1) when an attachment is being sent.
      *
      * @return the new message id, or 0 on failure.
      */
-    suspend fun reply(conversationId: Long, message: String, attachment: File? = null, idempotencyKey: String? = null): Long =
-        withContext(Dispatchers.IO) {
+    suspend fun reply(
+        conversationId: Long,
+        message: String,
+        attachment: File? = null,
+        idempotencyKey: String? = null,
+        onProgress: ((Float) -> Unit)? = null,
+    ): Long = withContext(Dispatchers.IO) {
             val reqBuilder = authed().url("$baseUrl/webhooks/chat/reply")
             if (!idempotencyKey.isNullOrBlank()) reqBuilder.header("Idempotency-Key", idempotencyKey)
 
             val body: RequestBody
             if (attachment != null) {
                 val mediaType = guessMediaType(attachment).toMediaTypeOrNull()
-                val partBody = attachment.asRequestBody(mediaType)
+                val partBody = ProgressRequestBody(attachment.asRequestBody(mediaType), onProgress)
                 body = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("conversation_id", conversationId.toString())
@@ -383,6 +390,33 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 if (json.optBoolean("ok", false)) json.optLong("id", 0) else 0
             }
         }
+
+    /** Reports upload progress (0..1) while a body is written. */
+    private class ProgressRequestBody(
+        private val delegate: RequestBody,
+        private val onProgress: ((Float) -> Unit)?,
+    ) : RequestBody() {
+        override fun contentType(): okhttp3.MediaType? = delegate.contentType()
+        override fun contentLength(): Long = delegate.contentLength()
+        override fun isOneShot(): Boolean = delegate.isOneShot()
+
+        override fun writeTo(sink: okio.BufferedSink) {
+            val total = contentLength()
+            var sent = 0L
+            val counting = object : okio.ForwardingSink(sink) {
+                override fun write(source: okio.Buffer, byteCount: Long) {
+                    super.write(source, byteCount)
+                    sent += byteCount
+                    if (total > 0) {
+                        onProgress?.invoke((sent.toFloat() / total).coerceIn(0f, 1f))
+                    }
+                }
+            }
+            val buffered = counting.buffer()
+            delegate.writeTo(buffered)
+            buffered.flush()
+        }
+    }
 
     /**
      * Download an attachment (full size or thumbnail) into a temp file.

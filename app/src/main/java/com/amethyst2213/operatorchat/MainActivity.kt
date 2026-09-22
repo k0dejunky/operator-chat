@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var emptyLabel: TextView
     private lateinit var loadingBar: ProgressBar
     private lateinit var searchInput: EditText
+    private lateinit var loadMoreButton: Button
 
     private val vm: MainViewModel by viewModels<MainViewModel>()
 
@@ -93,6 +94,8 @@ class MainActivity : AppCompatActivity() {
         emptyLabel = findViewById(R.id.empty_label)
         loadingBar = findViewById(R.id.loading_bar)
         searchInput = findViewById(R.id.search_input)
+        loadMoreButton = findViewById(R.id.load_more_button)
+        loadMoreButton.setOnClickListener { vm.loadMore() }
 
         inboxRecycler.layoutManager = LinearLayoutManager(this)
         inboxRecycler.adapter = InboxAdapter { openChat(it) }
@@ -143,6 +146,7 @@ class MainActivity : AppCompatActivity() {
         loginContainer.visibility = if (loggedIn) View.GONE else View.VISIBLE
         if (loggedIn) {
             (inboxRecycler.adapter as? InboxAdapter)?.submitList(state.items)
+            loadMoreButton.visibility = if (state.hasMore) View.VISIBLE else View.GONE
             emptyLabel.visibility = if (state.items.isEmpty()) View.VISIBLE else View.GONE
             loadingBar.visibility = if (state.loading) View.VISIBLE else View.GONE
             statusLabel.text = when {

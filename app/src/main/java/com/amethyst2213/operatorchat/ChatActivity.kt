@@ -1,6 +1,7 @@
 package com.amethyst2213.operatorchat
 
 import android.app.AlertDialog
+import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
@@ -351,6 +352,10 @@ class ChatActivity : AppCompatActivity() {
         val text = input.text.toString().trim()
         val pending = pendingAttachment
         if (text.isEmpty() && pending == null) return
+        if (pending != null && pending.length() > MAX_ATTACHMENT_BYTES) {
+            statusLabel.text = "Attachment too large (max 25 MB)."
+            return
+        }
         val idempotencyKey = prefs.getString("pending_reply_key_$conversationId", null)
             ?: UUID.randomUUID().toString().also {
                 prefs.edit().putString("pending_reply_key_$conversationId", it).apply()
@@ -380,7 +385,14 @@ class ChatActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             try {
-                val id = bridge?.reply(conversationId, text, pending, idempotencyKey) ?: 0
+                val id = bridge?.reply(
+                    conversationId, text, pending, idempotencyKey,
+                    onProgress = { p ->
+                        runOnUiThread {
+                            if (pending != null) statusLabel.text = "Uploading ${(p * 100).toInt()}%…"
+                        }
+                    },
+                ) ?: 0
                 if (id > 0) {
                     SendQueue.remove(this@ChatActivity, idempotencyKey)
                     prefs.edit().remove("draft_$conversationId").remove("pending_reply_key_$conversationId").apply()
@@ -543,16 +555,10 @@ class ChatActivity : AppCompatActivity() {
                 statusLabel.text = "Could not load image."
                 return@launch
             }
-            try {
-                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                    setDataAndType(androidx.core.content.FileProvider.getUriForFile(this@ChatActivity, "$packageName.fileprovider", dl), "image/*")
-                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                startActivity(intent)
-                statusLabel.text = "Live"
-            } catch (e: Exception) {
-                statusLabel.text = "No image viewer available."
-            }
+            val intent = Intent(this@ChatActivity, MediaViewerActivity::class.java)
+            intent.putExtra("path", dl.absolutePath)
+            startActivity(intent)
+            statusLabel.text = "Live"
         }
     }
 
@@ -576,5 +582,9 @@ class ChatActivity : AppCompatActivity() {
             h.btn.text = list[position]
             h.btn.setOnClickListener { onClick(list[position]) }
         }
+    }
+
+    private companion object {
+        const val MAX_ATTACHMENT_BYTES = 25L * 1024 * 1024
     }
 }

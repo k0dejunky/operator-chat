@@ -11,8 +11,8 @@ android {
         applicationId = "com.amethyst2213.operatorchat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 29
-        versionName = "2.18"
+        versionCode = 30
+        versionName = "2.19"
     }
 
     buildTypes {

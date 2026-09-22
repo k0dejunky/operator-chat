@@ -95,4 +95,14 @@
         android:paddingLeft="12dp"
         android:paddingRight="12dp"
         android:paddingBottom="16dp" />
+
+    <Button
+        android:id="@+id/load_more_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="12dp"
+        android:layout_marginRight="12dp"
+        android:layout_marginBottom="8dp"
+        android:text="Load more"
+        android:visibility="gone" />
 </LinearLayout>

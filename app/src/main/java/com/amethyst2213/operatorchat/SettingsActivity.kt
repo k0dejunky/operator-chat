@@ -28,6 +28,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var toneLabel: TextView
     private lateinit var biometricLabel: TextView
     private lateinit var quietLabel: TextView
+    private lateinit var diagnosticsLabel: TextView
     private lateinit var updateLabel: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -46,15 +47,18 @@ class SettingsActivity : AppCompatActivity() {
         toneLabel = findViewById(R.id.tone_label)
         biometricLabel = findViewById(R.id.biometric_label)
         quietLabel = findViewById(R.id.quiet_label)
+        diagnosticsLabel = findViewById(R.id.diagnostics_label)
         updateLabel = findViewById(R.id.update_label)
 
         findViewById<Button>(R.id.btn_notify_toggle).setOnClickListener { toggleNotifications() }
         findViewById<Button>(R.id.btn_tone).setOnClickListener { pickTone() }
         findViewById<Button>(R.id.btn_biometric).setOnClickListener { toggleBiometric() }
         findViewById<Button>(R.id.btn_quiet).setOnClickListener { editQuietHours() }
+        findViewById<Button>(R.id.btn_diagnostics).setOnClickListener { pingServer() }
         findViewById<Button>(R.id.btn_check_update).setOnClickListener { checkForUpdate() }
 
         refresh()
+        refreshDiagnostics()
     }
 
     override fun onSupportNavigateUp(): Boolean {
@@ -79,6 +83,42 @@ class SettingsActivity : AppCompatActivity() {
         val on = !prefs.getBoolean("biometric_lock", true)
         prefs.edit().putBoolean("biometric_lock", on).apply()
         refresh()
+    }
+
+    private fun refreshDiagnostics() {
+        val versionName = try {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        } catch (_: Exception) {
+            "?"
+        }
+        val lastSync = prefs.getString("last_sync_at", null) ?: "never"
+        val lastError = prefs.getString("last_error", null)
+        diagnosticsLabel.text = buildString {
+            append("App: v$versionName\n")
+            append("Server: ").append(if (baseUrl.isEmpty()) "not set" else baseUrl).append("\n")
+            append("Last sync: ").append(lastSync).append("\n")
+            if (!lastError.isNullOrEmpty()) append("Last error: ").append(lastError).append("\n")
+        }
+    }
+
+    private fun pingServer() {
+        if (baseUrl.isEmpty()) {
+            diagnosticsLabel.text = "Connect in the Users list first."
+            return
+        }
+        diagnosticsLabel.text = "Pinging server…"
+        val token = SecurePrefs.token(this)
+        lifecycleScope.launch {
+            val start = System.currentTimeMillis()
+            val v = ChatBridge(baseUrl, token).checkForUpdate()
+            val ms = System.currentTimeMillis() - start
+            val ok = v != null
+            prefs.edit().putString("last_sync_at", java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date()))
+                .apply()
+            if (!ok) prefs.edit().putString("last_error", "Ping failed").apply()
+            refreshDiagnostics()
+            diagnosticsLabel.text = (if (ok) "Server reachable — " else "Server unreachable — ") + "$ms ms"
+        }
     }
 
     private fun editQuietHours() {
