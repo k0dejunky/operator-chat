@@ -285,6 +285,8 @@ class ChatActivity : AppCompatActivity() {
                 hasMore = hist.size >= 50
                 adapter.notifyDataSetChanged()
                 statusLabel.text = "Live"
+                // Deliver any queued offline replies now that we are connected.
+                SendQueue.schedule(this@ChatActivity)
                 // Reading the thread clears its new-message state.
                 try { bridge?.setRead(conversationId, latestId) } catch (_: Exception) {}
             } catch (e: Exception) {
@@ -380,6 +382,7 @@ class ChatActivity : AppCompatActivity() {
             try {
                 val id = bridge?.reply(conversationId, text, pending, idempotencyKey) ?: 0
                 if (id > 0) {
+                    SendQueue.remove(this@ChatActivity, idempotencyKey)
                     prefs.edit().remove("draft_$conversationId").remove("pending_reply_key_$conversationId").apply()
                     if (pending != null) {
                         // Attachment sent: reload the thread so the real message
@@ -404,16 +407,29 @@ class ChatActivity : AppCompatActivity() {
                 } else {
                     messages.removeAll { it.id == placeholderId }
                     adapter.notifyDataSetChanged()
-                    pendingAttachment = pending
-                    input.setText(text)
-                    statusLabel.text = "Reply failed — tap Send to retry"
+                    if (pending == null) {
+                        // Queue offline (text): delivered automatically with backoff.
+                        SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey)
+                        SendQueue.schedule(this@ChatActivity)
+                        statusLabel.text = "Queued — will send automatically"
+                    } else {
+                        pendingAttachment = pending
+                        input.setText(text)
+                        statusLabel.text = "Send failed — tap Send to retry"
+                    }
                 }
             } catch (e: Exception) {
-                statusLabel.text = "Send error — tap Send to retry"
                 messages.removeAll { it.id == placeholderId }
                 adapter.notifyDataSetChanged()
-                pendingAttachment = pending
-                input.setText(text)
+                if (pending == null) {
+                    SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey)
+                    SendQueue.schedule(this@ChatActivity)
+                    statusLabel.text = "Queued — will send automatically"
+                } else {
+                    pendingAttachment = pending
+                    input.setText(text)
+                    statusLabel.text = "Send failed — tap Send to retry"
+                }
             }
         }
     }

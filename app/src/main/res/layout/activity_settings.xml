@@ -44,6 +44,38 @@
         android:layout_marginRight="16dp"
         android:text="Choose notification tone" />
 
+    <TextView
+        android:id="@+id/biometric_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:textSize="15sp"
+        android:textColor="@color/text" />
+
+    <Button
+        android:id="@+id/btn_biometric"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="16dp"
+        android:layout_marginRight="16dp"
+        android:text="Toggle biometric lock" />
+
+    <TextView
+        android:id="@+id/quiet_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:textSize="15sp"
+        android:textColor="@color/text" />
+
+    <Button
+        android:id="@+id/btn_quiet"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginLeft="16dp"
+        android:layout_marginRight="16dp"
+        android:text="Quiet hours" />
+
     <View
         android:layout_width="match_parent"
         android:layout_height="1dp"

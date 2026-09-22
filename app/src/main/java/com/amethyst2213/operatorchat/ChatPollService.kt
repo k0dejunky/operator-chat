@@ -117,8 +117,8 @@ class ChatPollService : Service() {
             }
             val interval = if (isMetered()) 300000L else backoffMs
             try {
-                val convs = bridge.inbox()
-                for (c in convs) {
+                val page = bridge.inbox()
+                for (c in page.items) {
                     if (!notifyEnabledFor(c.id)) continue
                     if (c.unreadReplyable <= 0 && primed) continue
                     // Fetch the thread only for conversations that changed.
@@ -169,6 +169,43 @@ class ChatPollService : Service() {
             ?: prefs.getString("notify_tone", null)
     }
 
+    /** True during the configured quiet hours (silent notifications). */
+    private fun quietNow(): Boolean {
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        if (!prefs.getBoolean("quiet_hours_enabled", false)) return false
+        val start = parseMinute(prefs.getString("quiet_start", "22:00"))
+        val end = parseMinute(prefs.getString("quiet_end", "08:00"))
+        val now = java.util.Calendar.getInstance()
+        val m = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE)
+        return if (start <= end) m in start until end else m >= start || m < end
+    }
+
+    private fun parseMinute(value: String?): Int {
+        val m = java.util.regex.Pattern.compile("^(\\d{1,2}):(\\d{2})$").matcher(value.orEmpty())
+        return if (m.matches()) {
+            val h = ((m.group(1) ?: "0").toIntOrNull() ?: 0) % 24
+            val min = ((m.group(2) ?: "0").toIntOrNull() ?: 0) % 60
+            h * 60 + min
+        } else 22 * 60
+    }
+
+    private fun mutePendingIntent(conversationId: Long): android.app.PendingIntent {
+        val i = Intent(this, ChatActionReceiver::class.java).apply {
+            action = ChatActionReceiver.ACTION_MUTE
+            putExtra("conversation_id", conversationId)
+        }
+        return android.app.PendingIntent.getBroadcast(
+            this,
+            conversationId.toInt(),
+            i,
+            if (Build.VERSION.SDK_INT >= 23) {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            } else {
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            },
+        )
+    }
+
     /** Tell MainActivity to refresh badges immediately. */
     private fun broadcastRefresh() {
         sendBroadcast(Intent(ACTION_CHAT_EVENT))
@@ -217,9 +254,10 @@ class ChatPollService : Service() {
             .setAutoCancel(true)
             .setContentIntent(openChatIntent(ev.conversationId))
         val tone = toneFor(ev.conversationId)
-        if (tone != null) {
+        if (tone != null && !quietNow()) {
             builder.setSound(android.net.Uri.parse(tone))
         }
+        builder.addAction(0, "Mute", mutePendingIntent(ev.conversationId))
         NotificationManagerCompat.from(this).notify((1000 + ev.conversationId).toInt(), builder.build())
     }
 
@@ -237,9 +275,10 @@ class ChatPollService : Service() {
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setAutoCancel(true)
             .setContentIntent(openChatIntent(c.id))
-        if (tone != null) {
+        if (tone != null && !quietNow()) {
             builder.setSound(android.net.Uri.parse(tone))
         }
+        builder.addAction(0, "Mute", mutePendingIntent(c.id))
         NotificationManagerCompat.from(this).notify((1000 + c.id).toInt(), builder.build())
     }
 

@@ -2,6 +2,7 @@ package com.amethyst2213.operatorchat
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
@@ -55,6 +56,13 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val memberReplyEnabled: Boolean,
     )
 
+    /** One page of the inbox, with a cursor for the next page. */
+    data class InboxPage(
+        val items: List<Conversation>,
+        val hasMore: Boolean = false,
+        val nextCursor: String? = null,
+    )
+
     data class ChatEvent(
         val id: Long,
         val conversationId: Long,
@@ -83,11 +91,10 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val attachmentThumbUrl: String?,
     )
 
-    /** GET /webhooks/chat/inbox — all conversations (no chat id needed). */
-    suspend fun inbox(query: String = "", cursor: String? = null, limit: Int = 50): List<Conversation> = withContext(Dispatchers.IO) {
-        val url = okhttp3.HttpUrl.Builder().scheme(if (baseUrl.startsWith("https")) "https" else "http")
-            .host(android.net.Uri.parse(baseUrl).host.orEmpty())
-            .addPathSegments(android.net.Uri.parse(baseUrl).path.orEmpty().trim('/'))
+    /** GET /webhooks/chat/inbox — a page of conversations with a next-cursor. */
+    suspend fun inbox(query: String = "", cursor: String? = null, limit: Int = 50): InboxPage = withContext(Dispatchers.IO) {
+        val base = baseUrl.toHttpUrlOrNull() ?: throw IllegalArgumentException("Invalid base URL")
+        val url = base.newBuilder()
             .addPathSegment("webhooks").addPathSegment("chat").addPathSegment("inbox")
             .addQueryParameter("limit", limit.toString())
             .apply { if (query.isNotBlank()) addQueryParameter("q", query) }
@@ -98,7 +105,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
             val json = JSONObject(resp.body?.string().orEmpty())
             val arr = json.optJSONArray("conversations") ?: JSONArray()
-            (0 until arr.length()).map { i ->
+            val items = (0 until arr.length()).map { i ->
                 val c = arr.getJSONObject(i)
                 Conversation(
                     id = c.optLong("id", 0),
@@ -118,14 +125,18 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                     canChat = c.optInt("can_chat", 0) == 1,
                 )
             }
+            InboxPage(
+                items = items,
+                hasMore = json.optBoolean("has_more", false),
+                nextCursor = if (json.isNull("next_cursor")) null else json.optString("next_cursor", null),
+            )
         }
     }
 
     /** GET /webhooks/chat/users?q= — search users the operator can message. */
     suspend fun searchUsers(query: String): List<UserResult> = withContext(Dispatchers.IO) {
-        val url = okhttp3.HttpUrl.Builder().scheme(if (baseUrl.startsWith("https")) "https" else "http")
-            .host(android.net.Uri.parse(baseUrl).host.orEmpty())
-            .addPathSegments(android.net.Uri.parse(baseUrl).path.orEmpty().trim('/'))
+        val base = baseUrl.toHttpUrlOrNull() ?: throw IllegalArgumentException("Invalid base URL")
+        val url = base.newBuilder()
             .addPathSegment("webhooks").addPathSegment("chat").addPathSegment("users")
             .addQueryParameter("q", query)
             .build()

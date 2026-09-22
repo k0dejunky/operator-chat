@@ -23,10 +23,15 @@ import android.widget.TextView
 import android.text.Editable
 import android.text.TextWatcher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
@@ -37,7 +42,9 @@ import kotlinx.coroutines.launch
 
 /**
  * Login + users list. Shows only users with unread member messages (favourites
- * pinned to the top), with a menu to view all users (most recent 25, unique).
+ * pinned to the top), with a menu to view all users. The inbox is owned by a
+ * ViewModel (StateFlow) so rotation never restarts work, and an optional
+ * biometric lock protects the operator view.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -51,10 +58,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadingBar: ProgressBar
     private lateinit var searchInput: EditText
 
-    private var bridge: ChatBridge? = null
-    private var allUsersMode = false
+    private val vm: MainViewModel by viewModels<MainViewModel>()
+
     private var refreshJob: Job? = null
-    private var inboxJob: Job? = null
     private var searchJob: Job? = null
     private var resumed = false
 
@@ -63,8 +69,8 @@ class MainActivity : AppCompatActivity() {
     /** Refresh badges as soon as the poll service sees a new message (push). */
     private val chatEventReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == ChatPollService.ACTION_CHAT_EVENT && bridge != null) {
-                loadInbox(showLoading = false)
+            if (intent.action == ChatPollService.ACTION_CHAT_EVENT) {
+                vm.refresh(showLoading = false)
             }
         }
     }
@@ -98,7 +104,7 @@ class MainActivity : AppCompatActivity() {
                 searchJob?.cancel()
                 searchJob = lifecycleScope.launch {
                     delay(250)
-                    if (bridge != null) loadInbox(showLoading = false)
+                    vm.setQuery(searchInput.text.toString().trim())
                 }
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -114,44 +120,62 @@ class MainActivity : AppCompatActivity() {
         if (savedUrl.isNotEmpty() && savedToken.isNotEmpty()) {
             urlInput.setText(savedUrl)
             tokenInput.setText(savedToken)
-            bridge = ChatBridge(savedUrl, savedToken)
-            setLoggedIn(true)
-            loadInbox()
+            // Restore the session behind the biometric lock when it is enabled.
+            if (biometricLockEnabled()) {
+                promptBiometric { restoreSession() }
+            } else {
+                restoreSession()
+            }
         }
 
         ContextCompat.registerReceiver(this, chatEventReceiver,
             IntentFilter(ChatPollService.ACTION_CHAT_EVENT), ContextCompat.RECEIVER_NOT_EXPORTED)
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                vm.state.collect { render(it) }
+            }
+        }
+    }
+
+    private fun render(state: MainViewModel.InboxState) {
+        val loggedIn = vm.bridge != null
+        loginContainer.visibility = if (loggedIn) View.GONE else View.VISIBLE
+        if (loggedIn) {
+            (inboxRecycler.adapter as? InboxAdapter)?.submitList(state.items)
+            emptyLabel.visibility = if (state.items.isEmpty()) View.VISIBLE else View.GONE
+            loadingBar.visibility = if (state.loading) View.VISIBLE else View.GONE
+            statusLabel.text = when {
+                state.loading -> if (vm.allUsersMode) "Loading all users…" else "Loading users…"
+                state.error != null -> state.error!!
+                else -> state.statusLine
+            }
+        } else {
+            (inboxRecycler.adapter as? InboxAdapter)?.submitList(emptyList())
+            statusLabel.text = state.statusLine
+        }
     }
 
     override fun onResume() {
         super.onResume()
         resumed = true
-        // Refresh when returning from a chat: reading/reply clears unread.
-        if (bridge != null) {
-            loadInbox(showLoading = false)
+        if (vm.bridge != null) {
+            vm.refresh(showLoading = false)
             startRefreshLoop()
         }
     }
 
     override fun onPause() {
         super.onPause()
-        // Stop the gentle inbox poll when the screen is not visible to save
-        // battery; SSE broadcasts + resume refresh keep badges current.
         resumed = false
         stopRefreshLoop()
     }
 
     override fun onDestroy() {
-        inboxJob?.cancel()
         searchJob?.cancel()
         stopRefreshLoop()
         try { unregisterReceiver(chatEventReceiver) } catch (_: Exception) {}
         super.onDestroy()
-    }
-
-    private fun setLoggedIn(loggedIn: Boolean) {
-        loginContainer.visibility = if (loggedIn) View.GONE else View.VISIBLE
-        if (loggedIn) statusLabel.text = "Loading users…"
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -162,15 +186,13 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_all_users -> {
-                allUsersMode = true
+                vm.setAllUsers(true)
                 supportActionBar?.setTitle("All users")
-                loadInbox()
                 true
             }
             R.id.action_unread -> {
-                allUsersMode = false
+                vm.setAllUsers(false)
                 supportActionBar?.setTitle("Users list")
-                loadInbox()
                 true
             }
             R.id.action_new_chat -> {
@@ -186,17 +208,9 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             R.id.action_logout -> {
-                SecurePrefs.clear(this)
-                searchInput.setText("")
-                bridge = null
-                (inboxRecycler.adapter as? InboxAdapter)?.submitList(emptyList())
-                emptyLabel.visibility = View.GONE
-                setLoggedIn(false)
+                vm.logout()
                 stopRefreshLoop()
-                statusLabel.text = "Logged out — enter server URL + token."
-                try {
-                    stopService(Intent(this, ChatPollService::class.java))
-                } catch (_: Exception) {}
+                stopPollService()
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -240,59 +254,28 @@ class MainActivity : AppCompatActivity() {
             statusLabel.text = "Server URL and token are required."
             return
         }
-        SecurePrefs.save(this, url, token)
-        bridge = ChatBridge(url, token)
-        setLoggedIn(true)
-        loadInbox()
+        vm.connect(url, token)
+        startPollService()
         startRefreshLoop()
     }
 
-    private fun loadInbox(showLoading: Boolean = true) {
-        val b = bridge ?: run { statusLabel.text = "Connect first."; return }
-        inboxJob?.cancel()
-        if (showLoading) {
-            loadingBar.visibility = View.VISIBLE
-            statusLabel.text = if (allUsersMode) "Loading all users…" else "Loading users…"
-        }
-        inboxJob = lifecycleScope.launch {
-            try {
-                val convs = b.inbox(searchInput.text.toString().trim())
-                val sorted = convs.sortedByDescending { it.lastMessageAt }
-                val displayed = if (allUsersMode) {
-                    // Most recent 25 unique users, favourites first.
-                    val fav = sorted.filter { Favorites.isFavorite(this@MainActivity, it.id) }
-                    val rest = sorted.filter { !Favorites.isFavorite(this@MainActivity, it.id) }
-                    (fav + rest).distinctBy { it.id }.take(25)
-                } else {
-                    // Unread users; favourites pinned to the top.
-                    val withUnread = sorted.filter { it.unreadReplyable > 0 }
-                    val fav = withUnread.filter { Favorites.isFavorite(this@MainActivity, it.id) }
-                    val rest = withUnread.filter { !Favorites.isFavorite(this@MainActivity, it.id) }
-                    (fav + rest).distinctBy { it.id }
-                }
-                val withFav = displayed.map { it.copy(favorite = Favorites.isFavorite(this@MainActivity, it.id)) }
-                (inboxRecycler.adapter as? InboxAdapter)?.submitList(withFav)
-                emptyLabel.visibility = if (displayed.isEmpty()) View.VISIBLE else View.GONE
-                statusLabel.text = when {
-                    displayed.isEmpty() && allUsersMode -> "No users yet."
-                    displayed.isEmpty() -> "No new messages."
-                    allUsersMode -> "Recent ${displayed.size} user(s)"
-                    else -> "${displayed.size} user(s) with new messages"
-                }
-                try {
-                    val si = Intent(this@MainActivity, ChatPollService::class.java)
-                    if (Build.VERSION.SDK_INT >= 26) startForegroundService(si) else startService(si)
-                } catch (_: Exception) {}
-            } catch (e: Exception) {
-                if (showLoading) {
-                    statusLabel.text = "Error: ${e.message ?: "connection failed"} — check URL/token."
-                }
-            } finally {
-                if (showLoading) {
-                    loadingBar.visibility = View.GONE
-                }
-            }
-        }
+    private fun restoreSession() {
+        vm.restore()
+        startPollService()
+        startRefreshLoop()
+    }
+
+    private fun startPollService() {
+        try {
+            val si = Intent(this, ChatPollService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(si) else startService(si)
+        } catch (_: Exception) {}
+    }
+
+    private fun stopPollService() {
+        try {
+            stopService(Intent(this, ChatPollService::class.java))
+        } catch (_: Exception) {}
     }
 
     /** Gentle background badge refresh, only while the screen is visible. */
@@ -301,7 +284,7 @@ class MainActivity : AppCompatActivity() {
         refreshJob = lifecycleScope.launch {
             while (true) {
                 delay(30000)
-                loadInbox(showLoading = false)
+                vm.refresh(showLoading = false)
             }
         }
     }
@@ -332,7 +315,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Search users and start a new conversation with any of them. */
     private fun showNewChatDialog() {
-        val b = bridge ?: run { statusLabel.text = "Connect first."; return }
+        val b = vm.bridge ?: run { statusLabel.text = "Connect first."; return }
 
         val search = EditText(this).apply {
             hint = "Search users by email…"
@@ -356,14 +339,14 @@ class MainActivity : AppCompatActivity() {
         }
         list.adapter = adapter
 
-        var searchJob: Job? = null
+        var dialogSearchJob: Job? = null
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                searchJob?.cancel()
+                dialogSearchJob?.cancel()
                 val q = s?.toString()?.trim().orEmpty()
                 if (q.length < 2) { results.clear(); adapter.notifyDataSetChanged(); return }
-                searchJob = lifecycleScope.launch {
+                dialogSearchJob = lifecycleScope.launch {
                     try {
                         val found = b.searchUsers(q)
                         results.clear()
@@ -403,6 +386,39 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ------------------------------------------------------------- biometric
+    private fun biometricLockEnabled(): Boolean {
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        return prefs.getBoolean("biometric_lock", true)
+    }
+
+    private fun promptBiometric(onAuthenticated: () -> Unit) {
+        val bm = ContextCompat.getSystemService(this, BiometricManager::class.java)
+        val canAuth = bm?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
+            BiometricManager.BIOMETRIC_SUCCESS
+        if (!canAuth) {
+            // No biometrics enrolled: proceed without the lock rather than lock out.
+            onAuthenticated()
+            return
+        }
+        val prompt = BiometricPrompt(
+            this,
+            ContextCompat.getMainExecutor(this),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    onAuthenticated()
+                }
+            }
+        )
+        prompt.authenticate(
+            BiometricPrompt.PromptInfo.Builder()
+                .setTitle("Operator Chat locked")
+                .setSubtitle("Authenticate to view the operator inbox")
+                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
+                .build()
+        )
+    }
+
     // ---------------------------------------------------------------- adapter
     inner class InboxAdapter(
         private val onClick: (ChatBridge.Conversation) -> Unit,
@@ -426,9 +442,9 @@ class MainActivity : AppCompatActivity() {
             h.star.text = if (c.favorite) "★" else "☆"
             h.star.setOnClickListener {
                 Favorites.toggle(this@MainActivity, c.id)
-                loadInbox()
+                vm.refresh(showLoading = false)
             }
-            if (allUsersMode) {
+            if (vm.allUsersMode) {
                 h.badge.visibility = if (c.unreadReplyable > 0) View.VISIBLE else View.GONE
                 if (c.unreadReplyable > 0) h.badge.text = c.unreadReplyable.toString()
                 h.preview.visibility = View.VISIBLE

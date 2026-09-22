@@ -8,6 +8,8 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.Toolbar
@@ -24,6 +26,8 @@ class SettingsActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
     private lateinit var notifyStatus: TextView
     private lateinit var toneLabel: TextView
+    private lateinit var biometricLabel: TextView
+    private lateinit var quietLabel: TextView
     private lateinit var updateLabel: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,10 +44,14 @@ class SettingsActivity : AppCompatActivity() {
 
         notifyStatus = findViewById(R.id.notify_status)
         toneLabel = findViewById(R.id.tone_label)
+        biometricLabel = findViewById(R.id.biometric_label)
+        quietLabel = findViewById(R.id.quiet_label)
         updateLabel = findViewById(R.id.update_label)
 
         findViewById<Button>(R.id.btn_notify_toggle).setOnClickListener { toggleNotifications() }
         findViewById<Button>(R.id.btn_tone).setOnClickListener { pickTone() }
+        findViewById<Button>(R.id.btn_biometric).setOnClickListener { toggleBiometric() }
+        findViewById<Button>(R.id.btn_quiet).setOnClickListener { editQuietHours() }
         findViewById<Button>(R.id.btn_check_update).setOnClickListener { checkForUpdate() }
 
         refresh()
@@ -59,6 +67,54 @@ class SettingsActivity : AppCompatActivity() {
         notifyStatus.text = if (on) "Notifications: ON" else "Notifications: OFF"
         val toneUri = prefs.getString("notify_tone", "") ?: ""
         toneLabel.text = "Default tone: " + (if (toneUri.isEmpty()) "Default" else readableName(toneUri))
+        val bio = prefs.getBoolean("biometric_lock", true)
+        biometricLabel.text = "Biometric lock: " + if (bio) "ON" else "OFF"
+        val qOn = prefs.getBoolean("quiet_hours_enabled", false)
+        val qStart = prefs.getString("quiet_start", "22:00") ?: "22:00"
+        val qEnd = prefs.getString("quiet_end", "08:00") ?: "08:00"
+        quietLabel.text = "Quiet hours: " + if (qOn) "ON ($qStart–$qEnd)" else "OFF"
+    }
+
+    private fun toggleBiometric() {
+        val on = !prefs.getBoolean("biometric_lock", true)
+        prefs.edit().putBoolean("biometric_lock", on).apply()
+        refresh()
+    }
+
+    private fun editQuietHours() {
+        val start = EditText(this).apply {
+            hint = "Start HH:MM"
+            setText(prefs.getString("quiet_start", "22:00"))
+        }
+        val end = EditText(this).apply {
+            hint = "End HH:MM"
+            setText(prefs.getString("quiet_end", "08:00"))
+        }
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column.addView(start)
+        column.addView(end)
+        val quietOn = prefs.getBoolean("quiet_hours_enabled", false)
+        AlertDialog.Builder(this)
+            .setTitle("Quiet hours")
+            .setMessage("Between these times, new-message notifications are silent.")
+            .setView(column)
+            .setPositiveButton(if (quietOn) "Save & enable" else "Enable") { _, _ ->
+                prefs.edit()
+                    .putString("quiet_start", start.text.toString().trim().ifEmpty { "22:00" })
+                    .putString("quiet_end", end.text.toString().trim().ifEmpty { "08:00" })
+                    .putBoolean("quiet_hours_enabled", true)
+                    .apply()
+                refresh()
+                restartPollService()
+            }
+            .setNeutralButton("Disable") { _, _ ->
+                prefs.edit().putBoolean("quiet_hours_enabled", false).apply()
+                refresh()
+                restartPollService()
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+            .show()
     }
 
     private fun toggleNotifications() {
