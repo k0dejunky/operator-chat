@@ -18,6 +18,7 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        pruneTemporaryCache()
 
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
@@ -52,6 +53,16 @@ class App : Application() {
         Coil.setImageLoader(
             ImageLoader.Builder(this).okHttpClient(client).build()
         )
+    }
+
+    private fun pruneTemporaryCache() {
+        val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+        cacheDir.listFiles()?.forEach { file ->
+            if ((file.name.startsWith("thumb_") || file.name.startsWith("full_") || file.name.startsWith("attachment_"))
+                && file.lastModified() < cutoff) {
+                file.delete()
+            }
+        }
     }
 
     companion object {
