@@ -4,11 +4,10 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
 import androidx.core.app.RemoteInput
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.Data
 import java.util.UUID
 
 /**
@@ -50,16 +49,10 @@ class ChatActionReceiver : BroadcastReceiver() {
     }
 
     private fun markRead(context: Context, conversationId: Long) {
-        val url = SecurePrefs.url(context)
-        val token = SecurePrefs.token(context)
-        if (url.isEmpty() || token.isEmpty()) return
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                ChatBridge(url, token).setRead(conversationId)
-            } catch (_: Exception) {
-                // best-effort
-            }
-        }
+        val request = OneTimeWorkRequestBuilder<MarkReadWorker>()
+            .setInputData(Data.Builder().putLong("conversation_id", conversationId).build())
+            .build()
+        WorkManager.getInstance(context).enqueue(request)
     }
 
     companion object {

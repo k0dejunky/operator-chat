@@ -6,6 +6,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
@@ -23,10 +24,8 @@ import java.util.concurrent.TimeUnit
  */
 class ChatBridge(private val baseUrl: String, private val token: String) {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .build()
+    private val client: OkHttpClient
+        get() = SHARED_CLIENT
 
     private fun authed(): Request.Builder = Request.Builder()
         .header("Authorization", "Bearer $token")
@@ -521,5 +520,12 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             name.endsWith(".pdf") -> "application/pdf"
             else -> "application/octet-stream"
         }
+    }
+    companion object {
+        private val SHARED_CLIENT = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
+            .build()
     }
 }

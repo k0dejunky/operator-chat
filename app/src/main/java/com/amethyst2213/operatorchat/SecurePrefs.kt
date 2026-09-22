@@ -18,6 +18,7 @@ object SecurePrefs {
     private const val TOKEN_KEY = "token"
     private const val IV_SUFFIX = ".iv"
     private const val LEGACY_STORE = "operator_chat"
+     private var cachedKey: SecretKey? = null
 
     fun url(context: Context): String = read(context, URL_KEY) ?: migrate(context, URL_KEY)
 
@@ -76,9 +77,15 @@ object SecurePrefs {
     }
 
     private fun keyFor(): SecretKey {
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        cachedKey?.let { return it }
+        synchronized(this) {
+            cachedKey?.let { return it }
+            val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val existing = store.getKey(KEY_ALIAS, null)
-        if (existing is SecretKey) return existing
+        if (existing is SecretKey) {
+                cachedKey = existing
+                return existing
+            }
 
         val generator = KeyGenerator.getInstance("AES", "AndroidKeyStore")
         generator.init(android.security.keystore.KeyGenParameterSpec.Builder(
@@ -88,6 +95,9 @@ object SecurePrefs {
         ).setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
             .build())
-        return generator.generateKey()
+        val generated = generator.generateKey()
+            cachedKey = generated
+            return generated
+        }
     }
 }

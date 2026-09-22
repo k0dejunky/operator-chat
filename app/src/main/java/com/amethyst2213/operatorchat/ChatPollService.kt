@@ -17,6 +17,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlin.random.Random
 
 /**
@@ -231,6 +232,7 @@ class ChatPollService : Service() {
 
     override fun onDestroy() {
         job?.cancel()
+        scope.coroutineContext.cancel()
         super.onDestroy()
     }
 
