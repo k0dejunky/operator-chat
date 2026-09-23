@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -15,6 +16,7 @@ import android.text.Editable
 import android.text.TextWatcher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
@@ -27,6 +29,9 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URLDecoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -61,6 +66,41 @@ class ChatActivity : AppCompatActivity() {
 
     private val pickAttachment = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) attachFromUri(uri)
+    }
+
+    /** Camera capture: an output Uri is supplied so the full-res photo/video is
+     *  written to our cache dir (otherwise ACTION_IMAGE_CAPTURE returns only a
+     *  small thumbnail). */
+    private var cameraOutput: File? = null
+
+    private val takePicture = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok: Boolean ->
+        val file = cameraOutput
+        cameraOutput = null
+        if (ok && file != null && file.exists() && file.length() > 0) {
+            pendingAttachment = file
+            statusLabel.text = "Photo ready: ${sanitize(file.name)} (will send with your reply)"
+        } else {
+            file?.delete()
+            statusLabel.text = "Photo cancelled"
+        }
+    }
+
+    private val takeVideo = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val file = cameraOutput
+        cameraOutput = null
+        val ok = result.resultCode == android.app.Activity.RESULT_OK
+        if (ok && file != null && file.exists() && file.length() > 0) {
+            if (file.length() > MAX_ATTACHMENT_BYTES) {
+                statusLabel.text = "Video too large (max 25 MB) — try a shorter recording."
+                file.delete()
+            } else {
+                pendingAttachment = file
+                statusLabel.text = "Video ready: ${sanitize(file.name)} (will send with your reply)"
+            }
+        } else {
+            file?.delete()
+            statusLabel.text = "Video cancelled"
+        }
     }
 
     private val emojis = listOf(
@@ -145,9 +185,7 @@ class ChatActivity : AppCompatActivity() {
             emojiBar.visibility = if (emojiBar.visibility == View.VISIBLE) View.GONE else View.VISIBLE
         }
 
-        attachButton.setOnClickListener {
-            pickAttachment.launch("*/*")
-        }
+        attachButton.setOnClickListener { showAttachChooser() }
 
         sendButton.setOnClickListener { sendReply() }
 
@@ -447,6 +485,51 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private var pendingAttachment: File? = null
+
+    /** Chooser for the attach button: take a photo, record a video, or pick
+     *  an existing file from the gallery / documents. */
+    private fun showAttachChooser() {
+        val options = arrayOf("📷 Take photo", "🎥 Record video", "📁 Gallery / files")
+        AlertDialog.Builder(this)
+            .setTitle("Attach")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> launchCamera(isVideo = false)
+                    1 -> launchCamera(isVideo = true)
+                    2 -> pickAttachment.launch("*/*")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Launch the system camera app writing a full-size capture to our cache
+     *  dir via a FileProvider Uri. */
+    private fun launchCamera(isVideo: Boolean) {
+        val intent = if (isVideo) Intent(MediaStore.ACTION_VIDEO_CAPTURE) else Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        val output = newCameraFile(isVideo)
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", output)
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+        if (isVideo) {
+            // Keep recordings bounded so they stay under the 25 MB upload cap.
+            intent.putExtra(MediaStore.EXTRA_DURATION_LIMIT, 60)
+        }
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        try {
+            cameraOutput = output
+            if (isVideo) takeVideo.launch(intent) else takePicture.launch(uri)
+        } catch (e: Exception) {
+            cameraOutput = null
+            output.delete()
+            statusLabel.text = "Camera unavailable: ${e.message}"
+        }
+    }
+
+    private fun newCameraFile(isVideo: Boolean): File {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val name = if (isVideo) "video_$stamp.mp4" else "photo_$stamp.jpg"
+        return File(cacheDir, name)
+    }
 
     private fun attachFromUri(uri: Uri) {
         try {
