@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Instagram-style story ring: gradient border with a dark inner circle. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="oval">
+            <gradient
+                android:angle="135"
+                android:startColor="@color/ig_gradient_start"
+                android:centerColor="@color/ig_gradient_mid"
+                android:endColor="@color/ig_gradient_end" />
+        </shape>
+    </item>
+    <item
+        android:left="3dp"
+        android:top="3dp"
+        android:right="3dp"
+        android:bottom="3dp">
+        <shape android:shape="oval">
+            <solid android:color="@color/surface_card" />
+        </shape>
+    </item>
+</layer-list>

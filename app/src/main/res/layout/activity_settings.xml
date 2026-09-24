@@ -5,12 +5,20 @@
     android:orientation="vertical"
     android:background="@color/surface">
 
-    <androidx.appcompat.widget.Toolbar
-        android:id="@+id/toolbar"
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        android:background="@color/purple_dark"
-        android:titleTextColor="@color/white" />
+        android:layout_height="wrap_content"
+        android:background="@drawable/ig_gradient">
+
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@android:color/transparent"
+            android:titleTextColor="@color/white"
+            app:titleTextAppearance="@style/Theme.OperatorChat.ToolbarTitle"
+            xmlns:app="http://schemas.android.com/apk/res-auto" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/notify_status"

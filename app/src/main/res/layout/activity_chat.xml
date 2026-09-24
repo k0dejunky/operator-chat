@@ -6,23 +6,32 @@
     android:orientation="vertical"
     android:background="@color/surface">
 
-    <!-- Header -->
-    <androidx.appcompat.widget.Toolbar
-        android:id="@+id/chat_toolbar"
+    <!-- Header: story gradient strip -->
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        android:background="@color/purple_dark"
-        android:titleTextColor="@color/white" />
+        android:layout_height="wrap_content"
+        android:background="@drawable/ig_gradient">
+
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/chat_toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@android:color/transparent"
+            android:titleTextColor="@color/white"
+            app:titleTextAppearance="@style/Theme.OperatorChat.ToolbarTitle"
+            xmlns:app="http://schemas.android.com/apk/res-auto" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/chat_status"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:paddingLeft="14dp"
-        android:paddingRight="14dp"
-        android:paddingBottom="4dp"
+        android:paddingLeft="16dp"
+        android:paddingRight="16dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="2dp"
         android:textSize="12sp"
-        android:textColor="@color/purple" />
+        android:textColor="@color/text_secondary" />
 
     <!-- Messages -->
     <androidx.recyclerview.widget.RecyclerView
@@ -31,7 +40,8 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:clipToPadding="false"
-        android:padding="10dp" />
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp" />
 
     <!-- Emoji quick bar -->
     <androidx.recyclerview.widget.RecyclerView
@@ -41,20 +51,20 @@
         android:visibility="gone"
         android:background="@color/surface_card" />
 
-    <!-- Bottom reply bar -->
+    <!-- Bottom reply bar (Snapchat-style dark composer) -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical"
         android:padding="8dp"
-         android:background="@color/surface_card"
-        android:elevation="6dp">
+        android:background="@color/surface"
+        android:elevation="8dp">
 
         <Button
             android:id="@+id/emoji_button"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:padding="0dp"
             android:minWidth="0dp"
             android:minHeight="0dp"
@@ -70,29 +80,32 @@
             android:layout_weight="1"
             android:layout_marginLeft="6dp"
             android:layout_marginRight="6dp"
-            android:hint="Type a reply…"
+            android:hint="Message…"
             android:maxLines="4"
-            android:gravity="top"
+            android:minHeight="44dp"
+            android:gravity="center_vertical"
+            android:textColor="@color/text"
+            android:textColorHint="@color/text_secondary"
             android:inputType="textMultiLine|textCapSentences"
             android:imeOptions="actionSend"
             android:background="@drawable/input_bg" />
 
         <Button
             android:id="@+id/attach_button"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:padding="0dp"
             android:minWidth="0dp"
             android:minHeight="0dp"
             android:contentDescription="Attach file"
-            android:text="📎"
+            android:text="📷"
             android:textSize="18sp"
             android:background="@drawable/input_bg" />
 
         <Button
             android:id="@+id/send_button"
-            android:layout_width="52dp"
-            android:layout_height="48dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:layout_marginLeft="6dp"
             android:padding="0dp"
             android:minWidth="0dp"
@@ -100,7 +113,7 @@
             android:contentDescription="Send"
             android:text="➤"
             android:textSize="18sp"
-             android:textColor="@color/white"
+            android:textColor="@color/white"
             android:background="@drawable/send_bg" />
     </LinearLayout>
 </LinearLayout>

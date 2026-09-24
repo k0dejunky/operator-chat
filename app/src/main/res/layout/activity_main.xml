@@ -5,12 +5,21 @@
     android:orientation="vertical"
     android:background="@color/surface">
 
-    <androidx.appcompat.widget.Toolbar
-        android:id="@+id/toolbar"
+    <!-- IG-style gradient header -->
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        android:background="@color/purple_dark"
-        android:titleTextColor="@color/white" />
+        android:layout_height="wrap_content"
+        android:background="@drawable/ig_gradient">
+
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@android:color/transparent"
+            android:titleTextColor="@color/white"
+            app:titleTextAppearance="@style/Theme.OperatorChat.ToolbarTitle"
+            xmlns:app="http://schemas.android.com/apk/res-auto" />
+    </FrameLayout>
 
     <LinearLayout
         android:id="@+id/login_container"
@@ -24,8 +33,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="Server URL (e.g. https://amethyst2213.com/gallery)"
+            android:textColor="@color/text"
+            android:textColorHint="@color/text_secondary"
             android:inputType="textUri"
-            android:background="@drawable/input_bg" />
+            android:background="@drawable/input_bg"
+            android:padding="14dp" />
 
         <EditText
             android:id="@+id/token_input"
@@ -33,8 +45,11 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:hint="Bridge token (GALLERY_CHAT_KEY)"
+            android:textColor="@color/text"
+            android:textColorHint="@color/text_secondary"
             android:inputType="textPassword"
-            android:background="@drawable/input_bg" />
+            android:background="@drawable/input_bg"
+            android:padding="14dp" />
 
         <Button
             android:id="@+id/connect_button"
@@ -52,6 +67,8 @@
         android:layout_marginTop="4dp"
         android:layout_marginEnd="16dp"
         android:hint="Search users by email"
+        android:textColor="@color/text"
+        android:textColorHint="@color/text_secondary"
         android:inputType="text"
         android:singleLine="true"
         android:background="@drawable/input_bg"
@@ -74,6 +91,7 @@
         android:layout_height="wrap_content"
         android:layout_gravity="center_horizontal"
         android:layout_marginTop="8dp"
+        android:indeterminateTint="@color/ig_gradient_start"
         android:visibility="gone" />
 
     <TextView
@@ -92,8 +110,7 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:clipToPadding="false"
-        android:paddingLeft="12dp"
-        android:paddingRight="12dp"
+        android:paddingTop="4dp"
         android:paddingBottom="16dp" />
 
     <Button

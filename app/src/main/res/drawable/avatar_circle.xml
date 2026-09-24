@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Circular unread-count badge (IG pink). -->
+<!-- Solid circular avatar fill (behind the member's initial). -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@color/ig_gradient_mid" />
+    <solid android:color="@color/purple" />
 </shape>

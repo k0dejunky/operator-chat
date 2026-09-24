@@ -1,13 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple">#7C3AED</color>
-    <color name="purple_dark">#5B21B6</color>
-    <color name="purple_light">#EDE9FE</color>
+    <!-- Brand / accent -->
+    <color name="purple">#833AB4</color>
+    <color name="purple_dark">#C13584</color>
+    <color name="purple_light">#E1306C</color>
+
+    <!-- Instagram story gradient stops -->
+    <color name="ig_gradient_start">#833AB4</color>
+    <color name="ig_gradient_mid">#FD1D1D</color>
+    <color name="ig_gradient_end">#FCAF45</color>
+
+    <!-- Snapchat yellow accent -->
+    <color name="snap_yellow">#FFFC00</color>
+
+    <!-- Dark theme surfaces (Snapchat/IG dark) -->
     <color name="white">#FFFFFF</color>
-    <color name="pink_100">#FFF7FC</color>
-    <color name="surface">#FFF7FC</color>
-    <color name="surface_card">#FFFFFF</color>
-    <color name="text">#24112F</color>
-    <color name="text_secondary">#6B5A73</color>
-    <color name="border">#E8DCEB</color>
+    <color name="black">#000000</color>
+    <color name="pink_100">#0D0D0D</color>
+    <color name="surface">#000000</color>
+    <color name="surface_card">#1A1A1A</color>
+    <color name="surface_elevated">#262626</color>
+    <color name="text">#FFFFFF</color>
+    <color name="text_secondary">#8E8E93</color>
+    <color name="border">#2A2A2E</color>
 </resources>

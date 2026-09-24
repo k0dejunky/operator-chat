@@ -433,6 +433,7 @@ class MainActivity : AppCompatActivity() {
             val badge: TextView = v.findViewById(R.id.row_badge)
             val star: TextView = v.findViewById(R.id.row_star)
             val preview: TextView = v.findViewById(R.id.row_preview)
+            val avatar: TextView = v.findViewById(R.id.row_avatar)
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
@@ -443,6 +444,8 @@ class MainActivity : AppCompatActivity() {
         override fun onBindViewHolder(h: Holder, position: Int) {
             val c = getItem(position)
             h.title.text = c.username.ifEmpty { c.userEmail }
+            val name = c.username.ifEmpty { c.userEmail }
+            h.avatar.text = name.trim().firstOrNull()?.uppercase() ?: "?"
             h.star.text = if (c.favorite) "★" else "☆"
             h.star.setOnClickListener {
                 Favorites.toggle(this@MainActivity, c.id)

@@ -1,12 +1,18 @@
 <resources>
-    <color name="purple">#C4B5FD</color>
-    <color name="purple_dark">#7C3AED</color>
-    <color name="purple_light">#312E81</color>
+    <color name="purple">#833AB4</color>
+    <color name="purple_dark">#C13584</color>
+    <color name="purple_light">#E1306C</color>
+    <color name="ig_gradient_start">#833AB4</color>
+    <color name="ig_gradient_mid">#FD1D1D</color>
+    <color name="ig_gradient_end">#FCAF45</color>
+    <color name="snap_yellow">#FFFC00</color>
     <color name="white">#FFFFFF</color>
-    <color name="pink_100">#1B1420</color>
-    <color name="surface">#17121B</color>
-    <color name="surface_card">#241B2A</color>
-    <color name="text">#F7ECFF</color>
-    <color name="text_secondary">#D1C2D7</color>
-    <color name="border">#4A3B52</color>
+    <color name="black">#000000</color>
+    <color name="pink_100">#0D0D0D</color>
+    <color name="surface">#000000</color>
+    <color name="surface_card">#1A1A1A</color>
+    <color name="surface_elevated">#262626</color>
+    <color name="text">#FFFFFF</color>
+    <color name="text_secondary">#8E8E93</color>
+    <color name="border">#2A2A2E</color>
 </resources>
