@@ -204,7 +204,7 @@ class SettingsActivity : AppCompatActivity() {
             val current = packageManager.getPackageInfo(packageName, 0).versionCode.toLong()
             if (v.versionCode > current) {
                 updateLabel.text = "Update available: v${v.latestVersion}\n${v.changelog}"
-                Updater.downloadAndInstall(this@SettingsActivity, baseUrl, v, updateLabel)
+                Updater.downloadAndInstall(lifecycleScope, this@SettingsActivity, baseUrl, token, v, updateLabel)
             } else {
                 updateLabel.text = "You're on the latest version (${v.latestVersion})."
             }

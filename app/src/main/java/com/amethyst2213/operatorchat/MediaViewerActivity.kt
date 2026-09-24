@@ -28,12 +28,40 @@ class MediaViewerActivity : AppCompatActivity() {
 
         Thread {
             val file = File(path)
-            val bmp = if (file.isFile) BitmapFactory.decodeFile(path) else null
+            val bmp = if (file.isFile) decodeSampled(file) else null
             runOnUiThread {
                 if (bmp != null) image.setImageBitmap(bmp) else finish()
             }
         }.start()
 
         WindowInsetsCompat.toWindowInsetsCompat(window.decorView.rootWindowInsets)
+    }
+
+    /**
+     * Decode a large image with a power-of-two inSampleSize so full-resolution
+     * photos cannot OOM the app. The sample size is chosen to keep the decoded
+     * bitmap near screen resolution rather than the raw file's dimensions.
+     */
+    private fun decodeSampled(file: File): android.graphics.Bitmap? {
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            var sample = 1
+            val target = 1920
+            while (bounds.outWidth / (sample * 2) >= target &&
+                bounds.outHeight / (sample * 2) >= target
+            ) {
+                sample *= 2
+            }
+            BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+                },
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 }

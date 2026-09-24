@@ -47,13 +47,19 @@ class ChatPollService : Service() {
         val token = SecurePrefs.token(this).trim()
 
         job?.cancel()
-        if (url.isNotEmpty() && token.isNotEmpty()) {
-            val bridge = ChatBridge(url, token)
-            val seen = mutableMapOf<Long, Long>() // conversation -> last seen member message id
-            job = scope.launch {
-                launch { eventsPump(bridge, seen) }   // primary: SSE push
-                launch { pollFallback(bridge, seen) } // fallback: 10s poll
-            }
+        if (url.isEmpty() || token.isEmpty()) {
+            // No credentials (logged out, or a system restart with cleared
+            // prefs): stop the foreground service instead of idling forever
+            // with a persistent notification.
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        val bridge = ChatBridge(url, token)
+        val seen = mutableMapOf<Long, Long>() // conversation -> last seen member message id
+        job = scope.launch {
+            launch { eventsPump(bridge, seen) }   // primary: SSE push
+            launch { pollFallback(bridge, seen) } // fallback: 10s poll
         }
         return START_STICKY
     }
@@ -71,8 +77,16 @@ class ChatPollService : Service() {
                 backoffMs = 3000L
                 if (events.isNotEmpty()) {
                     if (!primed) {
-                        // First batch just primes the high-water marks.
-                        events.forEach { seen[it.conversationId] = it.id }
+                        // First batch: prime the high-water marks so the
+                        // operator is not spammed with pre-install history. If
+                        // a message in that batch is genuinely fresh (created
+                        // within the last 2 minutes), it is still surfaced —
+                        // otherwise it would be swallowed silently.
+                        val freshNow = events.any { recentEvent(it) }
+                        events.forEach {
+                            seen[it.conversationId] = it.id
+                            if (freshNow) notifyFresh(it)
+                        }
                         since = events.maxOf { it.id }
                         prefs.edit().putLong("events_since", since).apply()
                         primed = true
@@ -118,22 +132,29 @@ class ChatPollService : Service() {
             }
             val interval = if (isMetered()) 300000L else backoffMs
             try {
-                val page = bridge.inbox()
-                for (c in page.items) {
-                    if (!notifyEnabledFor(c.id)) continue
-                    if (c.unreadReplyable <= 0 && primed) continue
-                    // Fetch the thread only for conversations that changed.
-                    val msgs = bridge.thread(c.id)
-                    val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
-                    val last = seen[c.id] ?: 0L
-                    if (primed && newestMember > last && newestMember > 0) {
-                        seen[c.id] = newestMember
-                        val tone = toneFor(c.id)
-                        notifyNewMessage(c, tone)
-                        broadcastRefresh()
-                    } else if (newestMember > last || last == 0L) {
-                        seen[c.id] = newestMember
+                // Walk every inbox page (up to 200 rows) so conversations past
+                // the first 50 can still notify when the stream is down.
+                var page = bridge.inbox()
+                var seenRows = 0
+                while (seenRows < 200 && page.items.isNotEmpty()) {
+                    for (c in page.items) {
+                        if (!notifyEnabledFor(c.id)) continue
+                        if (c.unreadReplyable <= 0 && primed) continue
+                        // Fetch the thread only for conversations that changed.
+                        val msgs = bridge.thread(c.id)
+                        val newestMember = msgs.filter { it.senderRole == "user" }.maxOfOrNull { it.id } ?: 0
+                        val last = seen[c.id] ?: 0L
+                        if (primed && newestMember > last && newestMember > 0) {
+                            seen[c.id] = newestMember
+                            val tone = toneFor(c.id)
+                            notifyNewMessage(c, tone)
+                            broadcastRefresh()
+                        } else if (newestMember > last || last == 0L) {
+                            seen[c.id] = newestMember
+                        }
                     }
+                    seenRows += page.items.size
+                    page = bridge.inbox(cursor = page.nextCursor)
                 }
                 primed = true
                 backoffMs = 30000L
@@ -257,6 +278,23 @@ class ChatPollService : Service() {
         i.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         return android.app.PendingIntent.getActivity(this, 0, i,
             if (Build.VERSION.SDK_INT >= 23) android.app.PendingIntent.FLAG_IMMUTABLE else 0)
+    }
+
+    /** True when an event's created_at is within the last 2 minutes. */
+    private fun recentEvent(ev: ChatBridge.ChatEvent): Boolean {
+        return try {
+            val at = java.time.Instant.parse(ev.createdAt)
+            java.time.Duration.between(at, java.time.Instant.now()).seconds in 0..120
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Notify a single fresh event during the priming batch. */
+    private fun notifyFresh(ev: ChatBridge.ChatEvent) {
+        if (!notifyEnabledFor(ev.conversationId)) return
+        notifyNewEvent(ev)
+        broadcastRefresh()
     }
 
     private fun notifyNewEvent(ev: ChatBridge.ChatEvent) {

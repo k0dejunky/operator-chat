@@ -79,4 +79,37 @@ class ChatBridgeTest {
         assertEquals(42L, cid)
         assertEquals("b", username)
     }
+
+    @Test
+    fun apkInfoParsesSha256() = runBlocking {
+        server.enqueue(
+            MockResponse().setBody(
+                """{"ok":true,"latestVersion":"2.26","versionCode":37,"apkUrl":"/gallery/assets/apk/OperatorChat-v2.26.apk","changelog":"hardened updates","sha256":"abc123def456"}"""
+            )
+        )
+        val v = bridge.checkForUpdate()
+        assertEquals("2.26", v?.latestVersion)
+        assertEquals(37L, v?.versionCode)
+        assertEquals("abc123def456", v?.sha256)
+    }
+
+    @Test
+    fun apkDownloadIsAuthenticated() = runBlocking {
+        val apkBytes = byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0x01)
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(okio.Buffer().apply { write(apkBytes) })
+        )
+        val dest = java.io.File.createTempFile("upd", ".apk")
+        try {
+            val f = bridge.downloadApk("2.26", dest)
+            assertEquals(dest, f)
+            val recorded = server.takeRequest() ?: error("no request")
+            assertEquals("Bearer test-token", recorded.getHeader("Authorization"))
+            assertTrue(recorded.path!!.contains("/webhooks/chat/apk?version=2.26"))
+        } finally {
+            dest.delete()
+        }
+    }
 }

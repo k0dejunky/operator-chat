@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- HTTPS to the production site uses the system trust store. -->
+    <!-- Release build: HTTPS only, system trust store (plus certificate
+         pinning for amethyst2213.com in ChatBridge). -->
     <base-config cleartextTrafficPermitted="false" />
-    <!-- Allow cleartext to the local dev server (192.168.1.110) for testing. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">192.168.1.110</domain>
-    </domain-config>
 </network-security-config>

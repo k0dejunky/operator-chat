@@ -25,6 +25,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlin.random.Random
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -343,6 +344,7 @@ class ChatActivity : AppCompatActivity() {
                 statusLabel.text = "Could not load thread: ${e.message}"
             }
             // Realtime stream loop.
+            var backoffMs = 1500L
             while (true) {
                 try {
                     val new = bridge?.streamOnce(conversationId, latestId) ?: emptyList()
@@ -354,9 +356,13 @@ class ChatActivity : AppCompatActivity() {
                         recycler.scrollToPosition(messages.size - 1)
                         try { bridge?.setRead(conversationId, latestId) } catch (_: Exception) {}
                     }
+                    backoffMs = 1500L
                 } catch (e: Exception) {
                     statusLabel.text = "Reconnecting…"
-                    delay(1500)
+                    // Exponential backoff with jitter so an outage doesn't
+                    // hammer the server or the radio forever.
+                    delay(backoffMs + Random.nextLong(0, 1000))
+                    backoffMs = minOf(backoffMs * 2, 30000L)
                 }
             }
         }
@@ -468,29 +474,26 @@ class ChatActivity : AppCompatActivity() {
                 } else {
                     messages.removeAll { it.id == placeholderId }
                     adapter.notifyDataSetChanged()
-                    if (pending == null) {
-                        // Queue offline (text): delivered automatically with backoff.
-                        SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey)
-                        SendQueue.schedule(this@ChatActivity)
-                        statusLabel.text = "Queued — will send automatically"
-                    } else {
-                        pendingAttachment = pending
-                        input.setText(text)
-                        statusLabel.text = "Send failed — tap Send to retry"
-                    }
+                    // Queue offline (text + optional attachment): delivered
+                    // automatically with backoff. The attachment is copied into
+                    // the persistent outbox dir so a cache clear can't lose it.
+                    val stashed = pending?.let { SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey) }
+                    SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed)
+                    SendQueue.schedule(this@ChatActivity)
+                    // Clear the pending key so the NEXT message gets a fresh
+                    // idempotency key (otherwise it would dedupe against this
+                    // queued one and be dropped, or return this message's id).
+                    prefs.edit().remove("pending_reply_key_$conversationId").apply()
+                    statusLabel.text = "Queued — will send automatically"
                 }
             } catch (e: Exception) {
                 messages.removeAll { it.id == placeholderId }
                 adapter.notifyDataSetChanged()
-                if (pending == null) {
-                    SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey)
-                    SendQueue.schedule(this@ChatActivity)
-                    statusLabel.text = "Queued — will send automatically"
-                } else {
-                    pendingAttachment = pending
-                    input.setText(text)
-                    statusLabel.text = "Send failed — tap Send to retry"
-                }
+                val stashed = pending?.let { SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey) }
+                SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed)
+                SendQueue.schedule(this@ChatActivity)
+                prefs.edit().remove("pending_reply_key_$conversationId").apply()
+                statusLabel.text = "Queued — will send automatically"
             }
         }
     }

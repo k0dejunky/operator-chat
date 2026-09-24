@@ -5,6 +5,7 @@ import android.os.Environment
 import android.util.Log
 import coil.Coil
 import coil.ImageLoader
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.FileWriter
@@ -19,6 +20,11 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         pruneTemporaryCache()
+
+        // Periodic safety net: re-drain the offline outbox every 15 minutes so
+        // a message is never stuck forever after WorkManager exhausts its
+        // immediate retry budget.
+        SendQueue.schedulePeriodic(this)
 
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
@@ -37,13 +43,19 @@ class App : Application() {
             }
         }
 
-        // Coil loader that attaches the operator token to every media request
-        // (attachments are Bearer-protected) and caches thumbnails on disk.
+        // Coil loader that attaches the operator token to media requests for
+        // the configured origin (attachments are Bearer-protected) and caches
+        // thumbnails on disk. The token is NEVER attached to requests for any
+        // other host, so an off-origin URL from server data can't exfiltrate it.
+        val baseUrl = SecurePrefs.url(this@App).toHttpUrlOrNull()
         val client = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val token = SecurePrefs.token(this@App)
                 val builder = chain.request().newBuilder()
-                if (token.isNotEmpty()) {
+                val req = chain.request()
+                val sameOrigin = baseUrl != null &&
+                    req.url.host == baseUrl.host && req.url.scheme == baseUrl.scheme
+                if (token.isNotEmpty() && sameOrigin) {
                     builder.header("Authorization", "Bearer $token")
                 }
                 chain.proceed(builder.build())
@@ -59,6 +71,16 @@ class App : Application() {
         val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
         cacheDir.listFiles()?.forEach { file ->
             if ((file.name.startsWith("thumb_") || file.name.startsWith("full_") || file.name.startsWith("attachment_"))
+                && file.lastModified() < cutoff) {
+                file.delete()
+            }
+        }
+
+        // Old downloaded APKs in the external files dir (updates install in
+        // place, so older installers only consume storage).
+        val external = getExternalFilesDir(null)
+        external?.listFiles()?.forEach { file ->
+            if (file.name.startsWith("OperatorChat-") && file.name.endsWith(".apk")
                 && file.lastModified() < cutoff) {
                 file.delete()
             }

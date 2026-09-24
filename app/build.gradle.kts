@@ -11,13 +11,25 @@ android {
         applicationId = "com.amethyst2213.operatorchat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 36
-        versionName = "2.25"
+        versionCode = 38
+        versionName = "2.27"
+
+        // Release uses the strict HTTPS-only network config; debug allows the
+        // dev server cleartext carve-out.
+        manifestPlaceholders["networkSecurityConfig"] = "@xml/network_security_config"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+        debug {
+            manifestPlaceholders["networkSecurityConfig"] = "@xml/network_security_config_debug"
         }
     }
 

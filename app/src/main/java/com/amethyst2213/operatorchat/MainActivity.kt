@@ -244,7 +244,7 @@ class MainActivity : AppCompatActivity() {
             }
             val current = packageManager.getPackageInfo(packageName, 0).versionCode.toLong()
             if (v.versionCode > current) {
-                Updater.downloadAndInstall(this@MainActivity, url, v, statusLabel)
+                Updater.downloadAndInstall(lifecycleScope, this@MainActivity, url, SecurePrefs.token(this@MainActivity), v, statusLabel)
             } else {
                 statusLabel.text = "You're on the latest version (${v.latestVersion})."
             }
@@ -401,8 +401,9 @@ class MainActivity : AppCompatActivity() {
         val canAuth = bm?.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
             BiometricManager.BIOMETRIC_SUCCESS
         if (!canAuth) {
-            // No biometrics enrolled: proceed without the lock rather than lock out.
-            onAuthenticated()
+            // No biometrics enrolled: fall back to the numeric passcode so the
+            // inbox is never silently unlocked. First use creates a passcode.
+            promptPasscode(onAuthenticated)
             return
         }
         val prompt = BiometricPrompt(
@@ -421,6 +422,47 @@ class MainActivity : AppCompatActivity() {
                 .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)
                 .build()
         )
+    }
+
+    /** Numeric passcode gate used when no biometrics are enrolled. */
+    private fun promptPasscode(onAuthenticated: () -> Unit) {
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or
+                android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
+            hint = if (Passcode.isSet(this@MainActivity)) "Enter your passcode" else "Create a 4-32 digit passcode"
+        }
+        val creating = !Passcode.isSet(this)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (creating) "Set a passcode" else "Operator Chat locked")
+            .setMessage(
+                if (creating) "This device has no biometrics enrolled. Set a passcode to protect the operator inbox."
+                else "Enter your passcode to view the operator inbox."
+            )
+            .setView(input)
+            .setPositiveButton(if (creating) "Set passcode" else "Unlock") { _, _ ->
+                val pin = input.text.toString().trim()
+                if (creating) {
+                    if (!Passcode.set(this, pin)) {
+                        toast("Passcode must be 4-32 digits.")
+                        promptPasscode(onAuthenticated)
+                    } else {
+                        onAuthenticated()
+                    }
+                } else if (Passcode.verify(this, pin)) {
+                    onAuthenticated()
+                } else {
+                    toast("Incorrect passcode.")
+                    promptPasscode(onAuthenticated)
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .create()
+            .show()
+    }
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
     }
 
     // ---------------------------------------------------------------- adapter

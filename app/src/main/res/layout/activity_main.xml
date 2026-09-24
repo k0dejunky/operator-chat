@@ -44,7 +44,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:hint="Bridge token (GALLERY_CHAT_KEY)"
+            android:hint="Operator token (or legacy shared key)"
             android:textColor="@color/text"
             android:textColorHint="@color/text_secondary"
             android:inputType="textPassword"

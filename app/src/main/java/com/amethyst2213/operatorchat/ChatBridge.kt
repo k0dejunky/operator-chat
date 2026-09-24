@@ -6,6 +6,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
+import okhttp3.CertificatePinner
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,6 +30,18 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
 
     private fun authed(): Request.Builder = Request.Builder()
         .header("Authorization", "Bearer $token")
+
+    /**
+     * Whether a raw URL (from server data) points at the configured origin.
+     * Relative paths are always same-origin; absolute URLs must match the
+     * base URL's scheme + host, so the operator token is never sent anywhere
+     * else (e.g. a CDN or compromised attachment_url/apkUrl).
+     */
+    private fun sameOrigin(raw: String): Boolean {
+        val base = baseUrl.toHttpUrlOrNull() ?: return false
+        val target = raw.toHttpUrlOrNull() ?: return true
+        return target.host == base.host && target.scheme == base.scheme
+    }
 
     data class Conversation(
         val id: Long,
@@ -77,6 +90,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val versionCode: Long,
         val apkUrl: String,
         val changelog: String,
+        val sha256: String = "",
     )
 
     data class Message(
@@ -223,21 +237,23 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         }
     }
 
-    /** GET /assets/apk/operator-chat-version.json — latest app version. */
+    /** GET /webhooks/chat/apk-info — latest app version + live APK sha256. */
     suspend fun checkForUpdate(): AppVersion? = withContext(Dispatchers.IO) {
-        val req = Request.Builder()
-            .url("$baseUrl/assets/apk/operator-chat-version.json")
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/apk-info")
             .get()
             .build()
         try {
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@use null
                 val j = JSONObject(resp.body?.string().orEmpty())
+                if (!j.optBoolean("ok", false)) return@use null
                 AppVersion(
                     latestVersion = j.optString("latestVersion", ""),
                     versionCode = j.optLong("versionCode", 0),
                     apkUrl = j.optString("apkUrl", ""),
                     changelog = j.optString("changelog", ""),
+                    sha256 = j.optString("sha256", ""),
                 )
             }
         } catch (_: Exception) {
@@ -422,7 +438,33 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      * Returns the file, or null on failure.
      */
     suspend fun download(attachmentUrl: String, dest: File): File? = withContext(Dispatchers.IO) {
-        val req = authed().url(resolveUrl(attachmentUrl)).get().build()
+        val resolved = resolveUrl(attachmentUrl)
+        val builder = authed().url(resolved)
+        if (!sameOrigin(attachmentUrl)) builder.removeHeader("Authorization")
+        val req = builder.build()
+        try {
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                resp.body?.byteStream()?.use { ins ->
+                    dest.outputStream().use { ous -> ins.copyTo(ous) }
+                }
+                dest
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Download the published APK for a version via the authenticated webhook.
+     * Returns the file, or null on failure.
+     */
+    suspend fun downloadApk(version: String, dest: File): File? = withContext(Dispatchers.IO) {
+        val safe = version.replace(Regex("[^0-9.]"), "")
+        val req = authed()
+            .url("$baseUrl/webhooks/chat/apk?version=$safe")
+            .get()
+            .build()
         try {
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
@@ -440,7 +482,9 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      * Download a full (absolute) URL into a file. Used for the APK update.
      */
     suspend fun downloadFile(url: String, dest: File): File? = withContext(Dispatchers.IO) {
-        val req = Request.Builder().url(url).get().build()
+        val builder = authed().url(url)
+        if (!sameOrigin(url)) builder.removeHeader("Authorization")
+        val req = builder.build()
         try {
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
@@ -522,10 +566,27 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         }
     }
     companion object {
-        private val SHARED_CLIENT = OkHttpClient.Builder()
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
-            .build()
+        private val SHARED_CLIENT: OkHttpClient by lazy {
+            val builder = OkHttpClient.Builder()
+                .connectTimeout(20, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
+
+            // Certificate pinning for the production host: the leaf SPKI plus
+            // the SSL.com intermediate (so a leaf renewal keeps working). Pins
+            // only ever apply to amethyst2213.com; other hosts use the system
+            // trust store.
+            builder.certificatePinner(
+                CertificatePinner.Builder()
+                    .add(
+                        "amethyst2213.com",
+                        "sha256/Oaafy95ec+V4ZtMk9bvRXi8wVKgVsmewsupQt1//+/E=",
+                        "sha256/0FKBVxnyd4Jq8v8ST+3sjO+WoB7PLBEpSdixbHE1L4g=",
+                    )
+                    .build()
+            )
+
+            builder.build()
+        }
     }
 }

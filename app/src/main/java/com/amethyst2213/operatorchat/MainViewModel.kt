@@ -88,7 +88,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val page = b.inbox(query, if (loadMore) nextCursor else null)
-                val sorted = page.items.sortedByDescending { it.lastMessageAt }
+                val sorted = page.items.sortedByDescending { parseEpoch(it.lastMessageAt) }
                 val displayed = if (allUsersMode) {
                     val fav = sorted.filter { Favorites.isFavorite(getApplication(), it.id) }
                     val rest = sorted.filter { !Favorites.isFavorite(getApplication(), it.id) }
@@ -130,6 +130,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     statusLine = msg,
                 )
             }
+        }
+    }
+
+    /** Parse the server's "yyyy-MM-dd HH:mm:ss" timestamp to epoch millis. */
+    private fun parseEpoch(value: String): Long {
+        return try {
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                .parse(value)
+                ?.time ?: 0L
+        } catch (_: Exception) {
+            0L
         }
     }
 }
