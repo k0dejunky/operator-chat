@@ -73,6 +73,8 @@
             android:hint="Type a reply…"
             android:maxLines="4"
             android:gravity="top"
+            android:inputType="textMultiLine|textCapSentences"
+            android:imeOptions="actionSend"
             android:background="@drawable/input_bg" />
 
         <Button

@@ -189,6 +189,17 @@ class ChatActivity : AppCompatActivity() {
 
         sendButton.setOnClickListener { sendReply() }
 
+        // Enter (or the keyboard's Send action) sends the reply. Shift+Enter
+        // still inserts a newline because the field stays multi-line.
+        input.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
+                sendReply()
+                true
+            } else {
+                false
+            }
+        }
+
         startStream()
     }
 
