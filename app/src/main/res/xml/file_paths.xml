@@ -2,4 +2,7 @@
 <paths>
     <cache-path name="chat_attachments" path="." />
     <external-cache-path name="ext_attachments" path="." />
+    <!-- APK updates are downloaded to getExternalFilesDir(null); without this
+         root FileProvider can't build a content:// URI for the installer. -->
+    <external-files-path name="downloads" path="." />
 </paths>
