@@ -186,10 +186,13 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     }
 
     private fun stopLiveSession(base: String, token: String) {
+        // Tell the server which stream ended so it can finalize the recording.
+        val streamKey = rtmpUrl?.substringAfterLast('/') ?: ""
+        val body = okhttp3.FormBody.Builder().add("stream_key", streamKey).build()
         val req = Request.Builder()
             .url(base + "/live/stop")
             .header("Authorization", "Bearer $token")
-            .post("".toRequestBody("application/json".toMediaType()))
+            .post(body)
             .build()
         client.newCall(req).execute().close()
     }
