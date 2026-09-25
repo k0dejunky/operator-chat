@@ -21,7 +21,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -29,6 +28,8 @@ import java.util.concurrent.TimeUnit
  * Live video broadcast: captures the device camera + mic, encodes H.264/AAC and
  * pushes RTMP to the site's MediaMTX server. Opens a live session via
  * /live/start (Bearer operator token), streams, and closes it via /live/stop.
+ * Orientation is handled automatically (portrait or landscape), so the stream
+ * stays upright no matter how the phone is held.
  */
 class LiveActivity : AppCompatActivity(), ConnectChecker {
 
@@ -39,6 +40,8 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
     private var stream: RtmpStream? = null
     private var rtmpUrl: String? = null
+    private var surfaceReady = false
+    private var streamRequested = false
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -65,11 +68,13 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         stopBtn = findViewById(R.id.live_stop)
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {}
+            override fun surfaceCreated(holder: SurfaceHolder) {
+                surfaceReady = true
+                maybeStartStreaming()
+            }
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                // If the preview disappears while streaming, keep the stream
-                // alive (the encoder holds its own surface).
+                surfaceReady = false
             }
         })
 
@@ -81,6 +86,16 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         }
 
         stopBtn.setOnClickListener { stopBroadcast() }
+    }
+
+    /** Prepare the encoder/stream once (kept alive across rotations). */
+    private fun prepareStream(): RtmpStream {
+        return RtmpStream(this, this).apply {
+            // Any orientation: the GL pipeline keeps the stream upright.
+            getGlInterface().autoHandleOrientation = true
+            prepareVideo(640, 360, 800 * 1000)
+            prepareAudio(32000, true, 64 * 1000)
+        }
     }
 
     private fun startBroadcast() {
@@ -104,15 +119,23 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
             }
 
             rtmpUrl = started.first
-            stream = RtmpStream(this@LiveActivity, this@LiveActivity).apply {
-                prepareVideo(640, 360, 800 * 1000)
-                prepareAudio(32000, true, 64 * 1000)
-                startPreview(surfaceView)
-                startStream(started.first)
-            }
             stopBtn.isEnabled = true
-            statusLabel.text = "Live — " + started.first.substringBefore('?')
+            maybeStartStreaming()
         }
+    }
+
+    /** Start preview + RTMP once the /live/start URL and the surface are ready. */
+    private fun maybeStartStreaming() {
+        val url = rtmpUrl ?: return
+        if (!surfaceReady) return
+        if (stream?.isStreaming == true) return
+
+        streamRequested = true
+        val s = prepareStream()
+        stream = s
+        s.startPreview(surfaceView)
+        statusLabel.text = "Connecting…"
+        s.startStream(url)
     }
 
     private fun stopBroadcast() {
@@ -122,6 +145,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         } catch (_: Exception) {
         }
         stream = null
+        streamRequested = false
         rtmpUrl?.let {
             val base = SecurePrefs.url(this).trim().trimEnd('/')
             val token = SecurePrefs.token(this).trim()
@@ -136,14 +160,18 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     }
 
     override fun onDestroy() {
-        stopBroadcast()
+        try {
+            stream?.stopStream()
+            stream?.release()
+        } catch (_: Exception) {
+        }
+        stream = null
         super.onDestroy()
     }
 
     private fun startLiveSession(base: String, token: String): Pair<String, String>? = try {
-        val url = base + "/live/start"
         val req = Request.Builder()
-            .url(url)
+            .url(base + "/live/start")
             .header("Authorization", "Bearer $token")
             .post("".toRequestBody("application/json".toMediaType()))
             .build()
@@ -172,7 +200,11 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         runOnUiThread { statusLabel.text = "Live" }
     }
     override fun onConnectionFailed(reason: String) {
-        runOnUiThread { statusLabel.text = "Stream failed: $reason" }
+        runOnUiThread {
+            statusLabel.text = "Stream failed: $reason"
+            stopBtn.isEnabled = false
+            goBtn.isEnabled = true
+        }
     }
     override fun onDisconnect() {
         runOnUiThread {
