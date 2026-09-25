@@ -21,3 +21,9 @@
 
 # FileProvider / app classes are referenced from the manifest by name.
 -keep class com.amethyst2213.operatorchat.** { *; }
+# RootEncoder (RTMP) pulls in optional SLF4J bindings; R8 must not fail on the
+# missing runtime binder.
+-dontwarn org.slf4j.**
+-dontwarn org.slf4j.impl.StaticLoggerBinder
+-keep class com.pedro.** { *; }
+-dontwarn com.pedro.**

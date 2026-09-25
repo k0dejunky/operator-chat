@@ -17,6 +17,11 @@
         android:title="Check for update"
         app:showAsAction="ifRoom" />
     <item
+        android:id="@+id/action_live"
+        android:icon="@android:drawable/ic_menu_camera"
+        android:title="Go live"
+        app:showAsAction="ifRoom" />
+    <item
         android:id="@+id/action_new_chat"
         android:icon="@android:drawable/ic_menu_add"
         android:title="New chat"

@@ -211,6 +211,11 @@ class MainActivity : AppCompatActivity() {
                 checkForUpdate()
                 true
             }
+            R.id.action_live -> {
+                val i = Intent(this, LiveActivity::class.java)
+                startActivity(i)
+                true
+            }
             R.id.action_logout -> {
                 vm.logout()
                 stopRefreshLoop()

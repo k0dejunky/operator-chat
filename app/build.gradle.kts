@@ -11,8 +11,8 @@ android {
         applicationId = "com.amethyst2213.operatorchat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 38
-        versionName = "2.27"
+        versionCode = 39
+        versionName = "2.28"
 
         // Release uses the strict HTTPS-only network config; debug allows the
         // dev server cleartext carve-out.
@@ -61,6 +61,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil:2.6.0")
     implementation("org.json:json:20240303")
+    // Live video broadcast (operator -> MediaMTX via RTMP).
+    implementation("com.github.pedroSG94.RootEncoder:library:2.6.1")
+    implementation("com.github.pedroSG94.RootEncoder:extra-sources:2.6.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
