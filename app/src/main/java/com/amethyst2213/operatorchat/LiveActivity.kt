@@ -37,6 +37,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private lateinit var statusLabel: TextView
     private lateinit var goBtn: Button
     private lateinit var stopBtn: Button
+    private lateinit var flipBtn: Button
 
     private var stream: RtmpStream? = null
     private var rtmpUrl: String? = null
@@ -52,7 +53,9 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
             val ok = perms[Manifest.permission.CAMERA] == true &&
                 perms[Manifest.permission.RECORD_AUDIO] == true
-            if (ok) startBroadcast() else {
+            if (ok) {
+                maybeStartPreview()
+            } else {
                 statusLabel.text = "Camera + mic permission required to go live."
                 Toast.makeText(this, "Camera + mic permission required.", Toast.LENGTH_LONG).show()
             }
@@ -66,10 +69,12 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         statusLabel = findViewById(R.id.live_status)
         goBtn = findViewById(R.id.live_go)
         stopBtn = findViewById(R.id.live_stop)
+        flipBtn = findViewById(R.id.live_flip)
 
         surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 surfaceReady = true
+                maybeStartPreview()
                 maybeStartStreaming()
             }
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
@@ -86,6 +91,25 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         }
 
         stopBtn.setOnClickListener { stopBroadcast() }
+
+        flipBtn.setOnClickListener {
+            val s = stream
+            if (s == null) {
+                Toast.makeText(this, "Waiting for the camera…", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            try {
+                val vs = s.videoSource
+                if (vs is com.pedro.encoder.input.sources.video.Camera1Source) vs.switchCamera()
+                else if (vs is com.pedro.encoder.input.sources.video.Camera2Source) vs.switchCamera()
+            } catch (_: Exception) {}
+        }
+
+        // Ask for camera + mic up front so the preview is available before Go Live.
+        val missing = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+        if (missing.isNotEmpty()) permLauncher.launch(missing)
     }
 
     /** Prepare the encoder/stream once (kept alive across rotations). */
@@ -96,6 +120,14 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
             prepareVideo(640, 360, 800 * 1000)
             prepareAudio(32000, true, 64 * 1000)
         }
+    }
+
+    /** Create the stream + camera preview (does not broadcast). */
+    private fun maybeStartPreview() {
+        if (!surfaceReady || stream != null) return
+        val s = prepareStream()
+        stream = s
+        try { s.startPreview(surfaceView) } catch (_: Exception) {}
     }
 
     private fun startBroadcast() {
@@ -124,33 +156,31 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         }
     }
 
-    /** Start preview + RTMP once the /live/start URL and the surface are ready. */
+    /** Start the RTMP broadcast once the URL, surface and preview are ready. */
     private fun maybeStartStreaming() {
         val url = rtmpUrl ?: return
         if (!surfaceReady) return
-        if (stream?.isStreaming == true) return
+        maybeStartPreview()
+        val s = stream ?: return
+        if (s.isStreaming) return
 
         streamRequested = true
-        val s = prepareStream()
-        stream = s
-        s.startPreview(surfaceView)
         statusLabel.text = "Connecting…"
         s.startStream(url)
     }
 
     private fun stopBroadcast() {
-        try {
-            stream?.stopStream()
-            stream?.release()
-        } catch (_: Exception) {
-        }
-        stream = null
+        // Stop the encoder/RTMP but keep the camera preview so the operator can
+        // reframe before the next broadcast.
+        try { stream?.stopStream() } catch (_: Exception) {}
         streamRequested = false
+
+        val base = SecurePrefs.url(this).trim().trimEnd('/')
+        val token = SecurePrefs.token(this).trim()
+        val key = rtmpUrl?.substringAfterLast('/') ?: ""
         rtmpUrl?.let {
-            val base = SecurePrefs.url(this).trim().trimEnd('/')
-            val token = SecurePrefs.token(this).trim()
             CoroutineScope(Dispatchers.IO).launch {
-                try { stopLiveSession(base, token) } catch (_: Exception) {}
+                try { stopLiveSession(base, token, key) } catch (_: Exception) {}
             }
         }
         rtmpUrl = null
@@ -185,9 +215,9 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         null
     }
 
-    private fun stopLiveSession(base: String, token: String) {
+    private fun stopLiveSession(base: String, token: String, streamKey: String) {
         // Tell the server which stream ended so it can finalize the recording.
-        val streamKey = rtmpUrl?.substringAfterLast('/') ?: ""
+        // streamKey is captured by the caller *before* rtmpUrl is cleared.
         val body = okhttp3.FormBody.Builder().add("stream_key", streamKey).build()
         val req = Request.Builder()
             .url(base + "/live/stop")
