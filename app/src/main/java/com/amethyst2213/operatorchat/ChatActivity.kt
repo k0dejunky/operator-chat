@@ -9,8 +9,11 @@ import android.provider.MediaStore
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.Spinner
 import android.widget.TextView
 import android.text.Editable
 import android.text.TextWatcher
@@ -411,6 +414,58 @@ class ChatActivity : AppCompatActivity() {
             statusLabel.text = "Attachment too large (max 25 MB)."
             return
         }
+        if (pending != null) {
+            showExpiryDialog { minutes, views -> doSend(text, pending, minutes, views) }
+        } else {
+            doSend(text, null, 0, 0)
+        }
+    }
+
+    /** Offer a time / view limit for the attached media before sending. */
+    private fun showExpiryDialog(after: (Int, Int) -> Unit) {
+        val durations = listOf(
+            0 to "No expiry", 5 to "5 minutes", 15 to "15 minutes", 30 to "30 minutes",
+            60 to "1 hour", 360 to "6 hours", 1440 to "24 hours",
+        )
+        val viewLimits = listOf(
+            0 to "Unlimited views", 1 to "1 view", 3 to "3 views", 5 to "5 views", 10 to "10 views",
+        )
+        val ctx = this
+        val layout = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(60, 24, 60, 8)
+            addView(TextView(ctx).apply { setText("Expire after"); textSize = 14f; setPadding(0, 0, 0, 4) })
+            addView(
+                Spinner(ctx).apply {
+                    adapter = ArrayAdapter<String>(ctx, android.R.layout.simple_spinner_dropdown_item, durations.map { it.second })
+                    tag = durations
+                }
+            )
+            addView(TextView(ctx).apply { setText("or after"); textSize = 14f; setPadding(0, 20, 0, 4) })
+            addView(
+                Spinner(ctx).apply {
+                    adapter = ArrayAdapter<String>(ctx, android.R.layout.simple_spinner_dropdown_item, viewLimits.map { it.second })
+                    tag = viewLimits
+                }
+            )
+        }
+        AlertDialog.Builder(ctx)
+            .setTitle("Expire this media?")
+            .setView(layout)
+            .setPositiveButton("Send") { _, _ ->
+                val dur = layout.getChildAt(1) as Spinner
+                val views = layout.getChildAt(3) as Spinner
+                @Suppress("UNCHECKED_CAST")
+                val durOpts = dur.tag as List<Pair<Int, String>>
+                @Suppress("UNCHECKED_CAST")
+                val viewOpts = views.tag as List<Pair<Int, String>>
+                after(durOpts[dur.selectedItemPosition].first, viewOpts[views.selectedItemPosition].first)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun doSend(text: String, pending: File?, expiresInMinutes: Int, maxViews: Int) {
         val idempotencyKey = prefs.getString("pending_reply_key_$conversationId", null)
             ?: UUID.randomUUID().toString().also {
                 prefs.edit().putString("pending_reply_key_$conversationId", it).apply()
@@ -432,6 +487,10 @@ class ChatActivity : AppCompatActivity() {
             attachmentType = null,
             attachmentUrl = null,
             attachmentThumbUrl = null,
+            expiresAt = null,
+            maxViews = maxViews,
+            viewCount = 0,
+            mediaExpired = false,
         )
         messages.add(optimistic)
         adapter.notifyItemInserted(messages.size - 1)
@@ -447,6 +506,8 @@ class ChatActivity : AppCompatActivity() {
                             if (pending != null) statusLabel.text = "Uploading ${(p * 100).toInt()}%…"
                         }
                     },
+                    expiresInMinutes = expiresInMinutes,
+                    maxViews = maxViews,
                 ) ?: 0
                 if (id > 0) {
                     SendQueue.remove(this@ChatActivity, idempotencyKey)
@@ -478,7 +539,7 @@ class ChatActivity : AppCompatActivity() {
                     // automatically with backoff. The attachment is copied into
                     // the persistent outbox dir so a cache clear can't lose it.
                     val stashed = pending?.let { SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey) }
-                    SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed)
+                    SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed, expiresInMinutes, maxViews)
                     SendQueue.schedule(this@ChatActivity)
                     // Clear the pending key so the NEXT message gets a fresh
                     // idempotency key (otherwise it would dedupe against this
@@ -490,7 +551,7 @@ class ChatActivity : AppCompatActivity() {
                 messages.removeAll { it.id == placeholderId }
                 adapter.notifyDataSetChanged()
                 val stashed = pending?.let { SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey) }
-                SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed)
+                SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed, expiresInMinutes, maxViews)
                 SendQueue.schedule(this@ChatActivity)
                 prefs.edit().remove("pending_reply_key_$conversationId").apply()
                 statusLabel.text = "Queued — will send automatically"
@@ -619,7 +680,11 @@ class ChatActivity : AppCompatActivity() {
             }
 
             if (m.attachmentName != null) {
-                if (m.attachmentThumbUrl != null) {
+                if (m.mediaExpired || m.attachmentUrl == null) {
+                    // Expiring media whose time / view limit has passed.
+                    h.attach.text = "🔒 Media expired"
+                    h.attach.visibility = View.VISIBLE
+                } else if (m.attachmentThumbUrl != null) {
                     // Image attachment: show thumbnail (Coil caches it), tap to open full size.
                     h.image.visibility = View.VISIBLE
                     loadThumb(m, h.image)

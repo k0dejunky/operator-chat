@@ -27,7 +27,10 @@ class SendReplyWorker(appContext: Context, params: WorkerParameters) :
                 val file = p.attachmentPath?.let { path ->
                     File(path).takeIf { it.isFile }
                 }
-                val id = bridge.reply(p.conversationId, p.message, file, p.key)
+                val id = bridge.reply(
+                    p.conversationId, p.message, file, p.key,
+                    expiresInMinutes = p.expiresInMinutes, maxViews = p.maxViews,
+                )
                 if (id > 0) {
                     SendQueue.remove(app, p.key)
                 } else {

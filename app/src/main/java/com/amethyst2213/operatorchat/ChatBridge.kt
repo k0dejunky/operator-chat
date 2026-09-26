@@ -103,6 +103,10 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val attachmentType: String?,
         val attachmentUrl: String?,
         val attachmentThumbUrl: String?,
+        val expiresAt: String?,
+        val maxViews: Int,
+        val viewCount: Int,
+        val mediaExpired: Boolean,
     )
 
     /** GET /webhooks/chat/inbox — a page of conversations with a next-cursor. */
@@ -376,6 +380,8 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         attachment: File? = null,
         idempotencyKey: String? = null,
         onProgress: ((Float) -> Unit)? = null,
+        expiresInMinutes: Int = 0,
+        maxViews: Int = 0,
     ): Long = withContext(Dispatchers.IO) {
             val reqBuilder = authed().url("$baseUrl/webhooks/chat/reply")
             if (!idempotencyKey.isNullOrBlank()) reqBuilder.header("Idempotency-Key", idempotencyKey)
@@ -384,13 +390,15 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             if (attachment != null) {
                 val mediaType = guessMediaType(attachment).toMediaTypeOrNull()
                 val partBody = ProgressRequestBody(attachment.asRequestBody(mediaType), onProgress)
-                body = MultipartBody.Builder()
+                val mb = MultipartBody.Builder()
                     .setType(MultipartBody.FORM)
                     .addFormDataPart("conversation_id", conversationId.toString())
                     .addFormDataPart("message", message)
                     .addFormDataPart("sender_role", "operator")
                     .addFormDataPart("attachment", attachment.name, partBody)
-                    .build()
+                if (expiresInMinutes > 0) mb.addFormDataPart("expires_in_minutes", expiresInMinutes.toString())
+                if (maxViews > 0) mb.addFormDataPart("max_views", maxViews.toString())
+                body = mb.build()
             } else {
                 val payload = JSONObject()
                     .put("conversation_id", conversationId)
@@ -530,6 +538,10 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 attachmentType = m.optString("attachment_type", "").ifEmpty { null },
                 attachmentUrl = m.optString("attachment_url", "").ifEmpty { null },
                 attachmentThumbUrl = m.optString("attachment_thumb_url", "").ifEmpty { null },
+                expiresAt = m.optString("expires_at", "").ifEmpty { null },
+                maxViews = m.optInt("max_views", 0),
+                viewCount = m.optInt("view_count", 0),
+                mediaExpired = m.optBoolean("media_expired", false),
             )
         }
     }

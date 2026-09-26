@@ -33,6 +33,8 @@ object SendQueue {
         val message: String,
         val key: String,
         val attachmentPath: String? = null,
+        val expiresInMinutes: Int = 0,
+        val maxViews: Int = 0,
     )
 
     fun pending(context: Context): List<Pending> {
@@ -51,6 +53,8 @@ object SendQueue {
                         o.optString("message", ""),
                         k,
                         o.optString("attachment_path", "").ifEmpty { null },
+                        o.optInt("expires_in_minutes", 0),
+                        o.optInt("max_views", 0),
                     )
                 }
             }
@@ -65,10 +69,12 @@ object SendQueue {
         message: String,
         key: String,
         attachmentPath: String? = null,
+        expiresInMinutes: Int = 0,
+        maxViews: Int = 0,
     ) {
         val list = pending(context).toMutableList()
         if (list.none { it.key == key }) {
-            list.add(Pending(conversationId, message, key, attachmentPath))
+            list.add(Pending(conversationId, message, key, attachmentPath, expiresInMinutes, maxViews))
             save(context, list)
         }
     }
@@ -146,6 +152,8 @@ object SendQueue {
                 .put("message", it.message)
                 .put("key", it.key)
             if (it.attachmentPath != null) o.put("attachment_path", it.attachmentPath)
+            if (it.expiresInMinutes > 0) o.put("expires_in_minutes", it.expiresInMinutes)
+            if (it.maxViews > 0) o.put("max_views", it.maxViews)
             arr.put(o)
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
