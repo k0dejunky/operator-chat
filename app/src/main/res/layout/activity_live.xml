@@ -31,11 +31,10 @@
             android:layout_height="240dp"
             android:background="#000">
 
-            <SurfaceView
+            <TextureView
                 android:id="@+id/live_surface"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:background="#000" />
+                android:layout_height="match_parent" />
 
             <Button
                 android:id="@+id/live_flip"

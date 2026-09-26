@@ -2,10 +2,10 @@ package com.amethyst2213.operatorchat
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
 import android.os.Bundle
+import android.view.TextureView
 import android.view.View
-import android.view.SurfaceHolder
-import android.view.SurfaceView
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -44,7 +44,7 @@ import java.util.concurrent.TimeUnit
  */
 class LiveActivity : AppCompatActivity(), ConnectChecker {
 
-    private lateinit var surfaceView: SurfaceView
+    private lateinit var textureView: TextureView
     private lateinit var statusLabel: TextView
     private lateinit var goBtn: Button
     private lateinit var stopBtn: Button
@@ -85,7 +85,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_live)
 
-        surfaceView = findViewById(R.id.live_surface)
+        textureView = findViewById(R.id.live_surface)
         statusLabel = findViewById(R.id.live_status)
         goBtn = findViewById(R.id.live_go)
         stopBtn = findViewById(R.id.live_stop)
@@ -94,17 +94,19 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         chatScroll = findViewById(R.id.live_chat_scroll)
         chatInput = findViewById(R.id.live_chat_input)
 
-        surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) {
+        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
                 surfaceReady = true
                 maybeStartPreview()
                 maybeStartStreaming()
             }
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
-            override fun surfaceDestroyed(holder: SurfaceHolder) {
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
                 surfaceReady = false
+                return true
             }
-        })
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
+        }
 
         goBtn.setOnClickListener {
             if (hasPermissions()) startBroadcast() else permLauncher.launch(
@@ -151,7 +153,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         val s = prepareStream()
         stream = s
         try {
-            s.startPreview(surfaceView)
+            s.startPreview(textureView)
         } catch (_: Exception) {
             // Camera not openable yet (e.g. permission dialog still up): drop
             // the stream so a later call can retry the preview.
