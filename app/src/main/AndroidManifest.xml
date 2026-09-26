@@ -44,6 +44,7 @@
             android:name=".LiveActivity"
             android:exported="false"
             android:configChanges="orientation|screenSize|screenLayout"
+            android:screenOrientation="sensor"
             android:theme="@style/Theme.OperatorChat" />
 
         <activity

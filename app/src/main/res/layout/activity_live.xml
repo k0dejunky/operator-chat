@@ -1,73 +1,126 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="@color/surface"
-    android:padding="16dp">
-
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Go live"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:textColor="@color/white"
-        android:layout_marginBottom="8dp" />
-
-    <androidx.appcompat.widget.Toolbar
-        android:id="@+id/live_toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:visibility="gone" />
-
-    <FrameLayout
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
-
-        <SurfaceView
-            android:id="@+id/live_surface"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:background="#000" />
-
-        <Button
-            android:id="@+id/live_flip"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="top|end"
-            android:layout_margin="8dp"
-            android:text="Flip" />
-    </FrameLayout>
-
-    <TextView
-        android:id="@+id/live_status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Ready"
-        android:textColor="#9a94ad"
-        android:paddingVertical="8dp" />
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="vertical"
+        android:padding="16dp">
 
-        <Button
-            android:id="@+id/live_go"
-            android:layout_width="0dp"
+        <TextView
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Go live" />
+            android:text="Go live"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="@color/white"
+            android:layout_marginBottom="8dp" />
 
-        <Button
-            android:id="@+id/live_stop"
-            android:layout_width="0dp"
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/live_toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:visibility="gone" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="240dp"
+            android:background="#000">
+
+            <SurfaceView
+                android:id="@+id/live_surface"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="#000" />
+
+            <Button
+                android:id="@+id/live_flip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:layout_margin="8dp"
+                android:text="Flip" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/live_status"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="End stream"
-            android:enabled="false" />
+            android:text="Ready"
+            android:textColor="#9a94ad"
+            android:paddingVertical="8dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/live_go"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Go live" />
+
+            <Button
+                android:id="@+id/live_stop"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="End stream"
+                android:enabled="false" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Live chat"
+            android:textColor="#9a94ad"
+            android:textSize="12sp"
+            android:letterSpacing="0.08"
+            android:paddingTop="12dp"
+            android:paddingBottom="4dp" />
+
+        <ScrollView
+            android:id="@+id/live_chat_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="130dp"
+            android:background="#141018"
+            android:padding="8dp">
+
+            <LinearLayout
+                android:id="@+id/live_chat_list"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </ScrollView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingTop="6dp">
+
+            <EditText
+                android:id="@+id/live_chat_input"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="Reply to viewers…"
+                android:textColor="@color/white"
+                android:textColorHint="#7a7185"
+                android:inputType="textCapSentences"
+                android:maxLength="500" />
+
+            <Button
+                android:id="@+id/live_chat_send"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Send" />
+        </LinearLayout>
     </LinearLayout>
-
-</LinearLayout>
+</ScrollView>
