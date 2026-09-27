@@ -228,9 +228,17 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         }
     }
 
+    /** Resolve the configured server base URL (trailing slash trimmed). */
+    private fun base(): String = SecurePrefs.url(this).trim().trimEnd('/')
+
+    /** Resolve the configured operator token. */
+    private fun token(): String = SecurePrefs.token(this).trim()
+
+    /** Resolve base URL + token in one go. */
+    private fun baseAndToken(): Pair<String, String> = base() to token()
+
     private fun startBroadcast() {
-        val base = SecurePrefs.url(this).trim().trimEnd('/')
-        val token = SecurePrefs.token(this).trim()
+        val (base, token) = baseAndToken()
         if (base.isEmpty() || token.isEmpty()) {
             statusLabel.text = "Sign in first."
             return
@@ -325,8 +333,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         try { stream?.stopStream() } catch (_: Exception) {}
         streamRequested = false
 
-        val base = SecurePrefs.url(this).trim().trimEnd('/')
-        val token = SecurePrefs.token(this).trim()
+        val (base, token) = baseAndToken()
         val key = rtmpUrl?.substringAfterLast('/') ?: ""
         rtmpUrl?.let {
             CoroutineScope(Dispatchers.IO).launch {
@@ -393,8 +400,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         }
         pauseBtn.text = if (paused) "Resume" else "Pause"
         statusLabel.text = if (paused) "Paused — viewers see a message" else "Live"
-        val base = SecurePrefs.url(this).trim().trimEnd('/')
-        val token = SecurePrefs.token(this).trim()
+        val (base, token) = baseAndToken()
         if (base.isEmpty() || token.isEmpty()) return
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -464,8 +470,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
     private fun startLiveChat() {
         stopLiveChat()
-        val base = SecurePrefs.url(this).trim().trimEnd('/')
-        val token = SecurePrefs.token(this).trim()
+        val (base, token) = baseAndToken()
         chatJob = lifecycleScope.launch {
             while (isActive) {
                 try {
@@ -546,8 +551,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         val text = chatInput.text.toString().trim()
         if (text.isEmpty()) return
         chatInput.setText("")
-        val base = SecurePrefs.url(this).trim().trimEnd('/')
-        val token = SecurePrefs.token(this).trim()
+        val (base, token) = baseAndToken()
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val body = okhttp3.FormBody.Builder().add("message", text).build()
