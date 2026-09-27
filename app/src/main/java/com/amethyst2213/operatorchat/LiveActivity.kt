@@ -140,46 +140,23 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     /** Prepare the encoder/stream once (kept alive across rotations). */
     private fun prepareStream(): RtmpStream {
         return RtmpStream(this, this).apply {
-            // Encode in the phone's current physical orientation so the stream
-            // (and the recording) matches how the phone is held: portrait ->
-            // 360x640, landscape -> 640x360. autoHandleOrientation keeps the
-            // content upright within that frame.
+            // Fixed square encoder: the stream keeps running through any phone
+            // rotation (no stop/restart), autoHandleOrientation keeps the
+            // content upright, and Fill crops the camera to the square so there
+            // are never letterbox bars.
             getGlInterface().autoHandleOrientation = true
-            val portrait = resources.configuration.orientation ==
-                android.content.res.Configuration.ORIENTATION_PORTRAIT
-            prepareVideo(if (portrait) 360 else 640, if (portrait) 640 else 360, 800 * 1000)
+            getGlInterface().setAspectRatioMode(com.pedro.encoder.utils.gl.AspectRatioMode.Fill)
+            prepareVideo(640, 640, 800 * 1000)
             prepareAudio(32000, true, 64 * 1000)
         }
     }
 
-    /** When the phone is rotated mid-broadcast, restart the encoder at the new
-     *  orientation so the stream keeps matching how the device is held.
-     *  The stream is stopped here and the new one is created only once the
-     *  TextureView has recreated its surface texture for the new orientation
-     *  (onSurfaceTextureAvailable) - attaching the new stream to the old,
-     *  about-to-be-replaced surface renders the preview offset to the side. */
+    /** Rotation is handled entirely on the fly by the fixed square encoder +
+     *  autoHandleOrientation, so no stream stop/restart is needed here. The
+     *  activity survives rotation via configChanges and the GL re-attaches to
+     *  the recreated TextureView surface itself. */
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        val s = stream ?: return
-        val url = rtmpUrl ?: return
-        if (!s.isStreaming) return
-        try {
-            s.stopStream()
-            s.release()
-        } catch (_: Exception) {
-        }
-        stream = null
-        streamRequested = false
-        statusLabel.text = "Rotating…"
-        // Fallback: if the surface texture happens not to be recreated (the
-        // orientation change didn't resize the view), restart once the layout
-        // settles so the stream doesn't stay stopped.
-        textureView.postDelayed({
-            if (stream == null && surfaceReady && rtmpUrl != null) {
-                maybeStartPreview()
-                maybeStartStreaming()
-            }
-        }, 400)
     }
 
     /** Create the stream + camera preview (does not broadcast). */
