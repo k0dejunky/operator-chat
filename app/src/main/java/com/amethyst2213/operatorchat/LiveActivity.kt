@@ -153,21 +153,33 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     }
 
     /** When the phone is rotated mid-broadcast, restart the encoder at the new
-     *  orientation so the stream keeps matching how the device is held. */
+     *  orientation so the stream keeps matching how the device is held.
+     *  The stream is stopped here and the new one is created only once the
+     *  TextureView has recreated its surface texture for the new orientation
+     *  (onSurfaceTextureAvailable) - attaching the new stream to the old,
+     *  about-to-be-replaced surface renders the preview offset to the side. */
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         val s = stream ?: return
         val url = rtmpUrl ?: return
-        if (!s.isStreaming || !surfaceReady) return
+        if (!s.isStreaming) return
         try {
             s.stopStream()
             s.release()
         } catch (_: Exception) {
         }
         stream = null
+        streamRequested = false
         statusLabel.text = "Rotating…"
-        maybeStartPreview()
-        maybeStartStreaming()
+        // Fallback: if the surface texture happens not to be recreated (the
+        // orientation change didn't resize the view), restart once the layout
+        // settles so the stream doesn't stay stopped.
+        textureView.postDelayed({
+            if (stream == null && surfaceReady && rtmpUrl != null) {
+                maybeStartPreview()
+                maybeStartStreaming()
+            }
+        }, 400)
     }
 
     /** Create the stream + camera preview (does not broadcast). */
