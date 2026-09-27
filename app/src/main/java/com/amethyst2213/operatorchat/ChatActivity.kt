@@ -680,17 +680,18 @@ class ChatActivity : AppCompatActivity() {
             }
 
             if (m.attachmentName != null) {
-                if (m.mediaExpired || m.attachmentUrl == null) {
+                if (m.mediaExpired) {
                     // Expiring media whose time / view limit has passed.
                     h.attach.text = "🔒 Media expired"
                     h.attach.visibility = View.VISIBLE
-                } else if (m.attachmentThumbUrl != null) {
+                } else if (m.attachmentThumbUrl != null && m.attachmentUrl != null) {
                     // Image attachment: show thumbnail (Coil caches it), tap to open full size.
                     h.image.visibility = View.VISIBLE
                     loadThumb(m, h.image)
                     h.image.setOnClickListener { openFullImage(m) }
                     h.attach.visibility = View.GONE
                 } else {
+                    // No URL yet (optimistic / queued send) or a non-image file.
                     h.attach.text = "📎 " + m.attachmentName
                     h.attach.visibility = View.VISIBLE
                 }
