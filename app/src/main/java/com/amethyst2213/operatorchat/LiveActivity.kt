@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
 import android.os.Bundle
+import android.os.Environment
 import android.os.PowerManager
 import android.view.WindowManager
 import android.view.TextureView
@@ -34,6 +35,10 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -69,6 +74,8 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private var rotating = false
     private var audioReady = true
     private var wakeLock: PowerManager.WakeLock? = null
+    private var recordFile: File? = null
+    private var recording = false
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -188,6 +195,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         if (!s.isStreaming) return
         rotating = true
         try {
+            stopLocalRecord()
             s.stopStream()
             s.release()
         } catch (_: Exception) {
@@ -279,6 +287,38 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         }
     }
 
+    /** Record the broadcast to an MP4 on the device alongside the RTMP push. */
+    private fun startLocalRecord() {
+        val s = stream ?: return
+        if (recording || s.isRecording) return
+        try {
+            val dir = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: filesDir
+            val name = "live-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".mp4"
+            val f = File(dir, name)
+            recordFile = f
+            s.startRecord(f.absolutePath, object : com.pedro.library.base.recording.RecordController.Listener {
+                override fun onStatusChange(status: com.pedro.library.base.recording.RecordController.Status) {
+                    recording = status != com.pedro.library.base.recording.RecordController.Status.STOPPED
+                }
+                override fun onError(e: Exception) {}
+            })
+            recording = true
+            runOnUiThread {
+                statusLabel.text = "Live — saving to: ${f.name}"
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun stopLocalRecord() {
+        recording = false
+        try {
+            stream?.stopRecord()
+        } catch (_: Exception) {
+        }
+        recordFile = null
+    }
+
     private fun stopBroadcast() {
         // Stop the encoder/RTMP but keep the camera preview so the operator can
         // reframe before the next broadcast.
@@ -299,6 +339,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         paused = false
         muteBtn.text = "Mute mic"
         pauseBtn.text = "Pause"
+        stopLocalRecord()
         releaseWakeLock()
         stopLiveChat()
         setStreamingUi(false)
@@ -370,6 +411,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
     override fun onDestroy() {
         stopLiveChat()
+        stopLocalRecord()
         releaseWakeLock()
         try {
             stream?.stopStream()
@@ -538,6 +580,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         runOnUiThread {
             setStreamingUi(true)
             statusLabel.text = "Live"
+            startLocalRecord()
         }
     }
     override fun onConnectionFailed(reason: String) {
