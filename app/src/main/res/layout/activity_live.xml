@@ -66,6 +66,22 @@
                 android:text="Go live" />
 
             <Button
+                android:id="@+id/live_mute"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Mute mic"
+                android:enabled="false" />
+
+            <Button
+                android:id="@+id/live_pause"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Pause"
+                android:enabled="false" />
+
+            <Button
                 android:id="@+id/live_stop"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"

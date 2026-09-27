@@ -48,6 +48,8 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private lateinit var statusLabel: TextView
     private lateinit var goBtn: Button
     private lateinit var stopBtn: Button
+    private lateinit var muteBtn: Button
+    private lateinit var pauseBtn: Button
     private lateinit var flipBtn: Button
     private lateinit var chatList: LinearLayout
     private lateinit var chatScroll: ScrollView
@@ -59,6 +61,8 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private var streamRequested = false
     private var chatJob: Job? = null
     private var latestChatId = 0L
+    private var micMuted = false
+    private var paused = false
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -89,6 +93,8 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         statusLabel = findViewById(R.id.live_status)
         goBtn = findViewById(R.id.live_go)
         stopBtn = findViewById(R.id.live_stop)
+        muteBtn = findViewById(R.id.live_mute)
+        pauseBtn = findViewById(R.id.live_pause)
         flipBtn = findViewById(R.id.live_flip)
         chatList = findViewById(R.id.live_chat_list)
         chatScroll = findViewById(R.id.live_chat_scroll)
@@ -116,6 +122,9 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
         stopBtn.setOnClickListener { stopBroadcast() }
 
+        muteBtn.setOnClickListener { toggleMicMute() }
+        pauseBtn.setOnClickListener { togglePause() }
+
         flipBtn.setOnClickListener {
             val s = stream
             if (s == null) {
@@ -140,23 +149,43 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     /** Prepare the encoder/stream once (kept alive across rotations). */
     private fun prepareStream(): RtmpStream {
         return RtmpStream(this, this).apply {
-            // Fixed square encoder: the stream keeps running through any phone
-            // rotation (no stop/restart), autoHandleOrientation keeps the
-            // content upright, and Fill crops the camera to the square so there
-            // are never letterbox bars.
+            // Encode in the phone's current physical orientation so the stream
+            // keeps the correct aspect ratio: portrait -> 360x640, landscape ->
+            // 640x360. autoHandleOrientation keeps the content upright.
             getGlInterface().autoHandleOrientation = true
-            getGlInterface().setAspectRatioMode(com.pedro.encoder.utils.gl.AspectRatioMode.Fill)
-            prepareVideo(640, 640, 800 * 1000)
-            prepareAudio(32000, true, 64 * 1000)
+            val portrait = resources.configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_PORTRAIT
+            prepareVideo(if (portrait) 360 else 640, if (portrait) 640 else 360, 800 * 1000)
+            prepareAudio(44100, false, 96 * 1000)
         }
     }
 
-    /** Rotation is handled entirely on the fly by the fixed square encoder +
-     *  autoHandleOrientation, so no stream stop/restart is needed here. The
-     *  activity survives rotation via configChanges and the GL re-attaches to
-     *  the recreated TextureView surface itself. */
+    /** When the phone is rotated mid-broadcast, restart the encoder at the new
+     *  orientation so the stream keeps the correct aspect ratio. The new stream
+     *  is created only once the TextureView has recreated its surface texture
+     *  for the new orientation (onSurfaceTextureAvailable) - attaching it to
+     *  the old, about-to-be-replaced surface renders the preview offset. */
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
+        val s = stream ?: return
+        val url = rtmpUrl ?: return
+        if (!s.isStreaming) return
+        try {
+            s.stopStream()
+            s.release()
+        } catch (_: Exception) {
+        }
+        stream = null
+        streamRequested = false
+        statusLabel.text = "Rotating…"
+        // Fallback: if the surface texture isn't recreated (orientation change
+        // didn't resize the view), restart once the layout settles.
+        textureView.postDelayed({
+            if (stream == null && surfaceReady && rtmpUrl != null) {
+                maybeStartPreview()
+                maybeStartStreaming()
+            }
+        }, 400)
     }
 
     /** Create the stream + camera preview (does not broadcast). */
@@ -195,6 +224,8 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
             rtmpUrl = started.first
             stopBtn.isEnabled = true
+            muteBtn.isEnabled = true
+            pauseBtn.isEnabled = true
             startLiveChat()
             maybeStartStreaming()
         }
@@ -211,6 +242,20 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         streamRequested = true
         statusLabel.text = "Connecting…"
         s.startStream(url)
+        // Re-apply mute/pause after a reconnect (e.g. a rotation restart).
+        applyStreamState(s)
+    }
+
+    /** Re-apply the operator's mic-mute / pause to a (re)started stream. */
+    private fun applyStreamState(s: RtmpStream) {
+        try {
+            if (micMuted) s.getStreamClient().setOnlyVideo(true)
+            if (paused) {
+                s.getGlInterface().muteVideo()
+                s.getStreamClient().setOnlyVideo(true)
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun stopBroadcast() {
@@ -230,8 +275,54 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         rtmpUrl = null
         stopLiveChat()
         stopBtn.isEnabled = false
+        muteBtn.isEnabled = false
+        pauseBtn.isEnabled = false
         goBtn.isEnabled = true
         statusLabel.text = "Stopped"
+    }
+
+    /** Mute/unmute the microphone without stopping the stream. */
+    private fun toggleMicMute() {
+        val s = stream ?: return
+        micMuted = !micMuted
+        try {
+            // setOnlyVideo(true) = send video only (drop the mic); false restores it.
+            s.getStreamClient().setOnlyVideo(micMuted)
+        } catch (_: Exception) {
+        }
+        muteBtn.text = if (micMuted) "Unmute mic" else "Mute mic"
+        statusLabel.text = if (micMuted) "Mic muted" else "Live"
+    }
+
+    /** Pause/resume the broadcast without ending it (viewers see a message). */
+    private fun togglePause() {
+        val s = stream ?: return
+        paused = !paused
+        try {
+            // Pause: mute the video feed + drop audio so nothing sensitive
+            // streams while the model steps away; the site shows a message.
+            s.getGlInterface().let {
+                if (paused) it.muteVideo() else it.unMuteVideo()
+            }
+            s.getStreamClient().setOnlyVideo(paused)
+        } catch (_: Exception) {
+        }
+        pauseBtn.text = if (paused) "Resume" else "Pause"
+        statusLabel.text = if (paused) "Paused — viewers see a message" else "Live"
+        val base = SecurePrefs.url(this).trim().trimEnd('/')
+        val token = SecurePrefs.token(this).trim()
+        if (base.isEmpty() || token.isEmpty()) return
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val req = Request.Builder()
+                    .url(base + (if (paused) "/live/pause" else "/live/resume"))
+                    .header("Authorization", "Bearer $token")
+                    .post("".toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(req).execute().close()
+            } catch (_: Exception) {
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -403,12 +494,16 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         runOnUiThread {
             statusLabel.text = "Stream failed: $reason"
             stopBtn.isEnabled = false
+            muteBtn.isEnabled = false
+            pauseBtn.isEnabled = false
             goBtn.isEnabled = true
         }
     }
     override fun onDisconnect() {
         runOnUiThread {
             stopBtn.isEnabled = false
+            muteBtn.isEnabled = false
+            pauseBtn.isEnabled = false
             goBtn.isEnabled = true
             statusLabel.text = "Disconnected"
         }
