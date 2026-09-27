@@ -64,6 +64,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private var micMuted = false
     private var paused = false
     private var rotating = false
+    private var audioReady = true
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -157,7 +158,13 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
             val portrait = resources.configuration.orientation ==
                 android.content.res.Configuration.ORIENTATION_PORTRAIT
             prepareVideo(if (portrait) 360 else 640, if (portrait) 640 else 360, 800 * 1000)
-            prepareAudio(44100, false, 96 * 1000)
+            // AAC stereo 44.1k/128k is the most widely supported mic capture
+            // config. prepareAudio returns false when the mic/encoder can't be
+            // initialized (then the stream is video-only), so surface it.
+            audioReady = prepareAudio(44100, true, 128 * 1000, false, false)
+            if (!audioReady) {
+                android.util.Log.e("LiveActivity", "prepareAudio failed - broadcasting without audio")
+            }
         }
     }
 
@@ -227,6 +234,10 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
             rtmpUrl = started.first
             setStreamingUi(true)
+            if (!audioReady) {
+                statusLabel.text = "Live (no audio - mic unavailable)"
+                Toast.makeText(this@LiveActivity, "Mic could not be initialized - streaming video only.", Toast.LENGTH_LONG).show()
+            }
             startLiveChat()
             maybeStartStreaming()
         }
@@ -275,6 +286,10 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         }
         rtmpUrl = null
         rotating = false
+        micMuted = false
+        paused = false
+        muteBtn.text = "Mute mic"
+        pauseBtn.text = "Pause"
         stopLiveChat()
         setStreamingUi(false)
         statusLabel.text = "Stopped"
