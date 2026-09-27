@@ -9,6 +9,7 @@
     <!-- Live video broadcast from the app's own camera + mic (MediaMTX RTMP). -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- The app launches the system camera app to attach photos/videos to chat;
          the CAMERA permission is not declared (the system camera is a separate

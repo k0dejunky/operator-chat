@@ -1,9 +1,12 @@
 package com.amethyst2213.operatorchat
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.SurfaceTexture
 import android.os.Bundle
+import android.os.PowerManager
+import android.view.WindowManager
 import android.view.TextureView
 import android.view.View
 import android.widget.Button
@@ -65,6 +68,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private var paused = false
     private var rotating = false
     private var audioReady = true
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -90,6 +94,10 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_live)
+
+        // Keep the screen on while the broadcast screen is open, so the device
+        // never sleeps and drops the stream.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         textureView = findViewById(R.id.live_surface)
         statusLabel = findViewById(R.id.live_status)
@@ -234,6 +242,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
             rtmpUrl = started.first
             setStreamingUi(true)
+            acquireWakeLock()
             if (!audioReady) {
                 statusLabel.text = "Live (no audio - mic unavailable)"
                 Toast.makeText(this@LiveActivity, "Mic could not be initialized - streaming video only.", Toast.LENGTH_LONG).show()
@@ -290,9 +299,29 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         paused = false
         muteBtn.text = "Mute mic"
         pauseBtn.text = "Pause"
+        releaseWakeLock()
         stopLiveChat()
         setStreamingUi(false)
         statusLabel.text = "Stopped"
+    }
+
+    /** Hold a partial wake lock so the CPU/network stays alive while streaming
+     *  (guards against the device dozing even if the screen is turned off). */
+    private fun acquireWakeLock() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "operatorchat:live")
+                .apply { acquire(2 * 60 * 60 * 1000L) }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.takeIf { it.isHeld }?.release()
+        } catch (_: Exception) {
+        }
+        wakeLock = null
     }
 
     /** Mute/unmute the microphone without stopping the stream. */
@@ -341,6 +370,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
 
     override fun onDestroy() {
         stopLiveChat()
+        releaseWakeLock()
         try {
             stream?.stopStream()
             stream?.release()
