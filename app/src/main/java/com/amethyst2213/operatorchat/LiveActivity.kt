@@ -63,6 +63,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private var latestChatId = 0L
     private var micMuted = false
     private var paused = false
+    private var rotating = false
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -170,6 +171,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         val s = stream ?: return
         val url = rtmpUrl ?: return
         if (!s.isStreaming) return
+        rotating = true
         try {
             s.stopStream()
             s.release()
@@ -182,6 +184,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
         // didn't resize the view), restart once the layout settles.
         textureView.postDelayed({
             if (stream == null && surfaceReady && rtmpUrl != null) {
+                rotating = false
                 maybeStartPreview()
                 maybeStartStreaming()
             }
@@ -223,9 +226,7 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
             }
 
             rtmpUrl = started.first
-            stopBtn.isEnabled = true
-            muteBtn.isEnabled = true
-            pauseBtn.isEnabled = true
+            setStreamingUi(true)
             startLiveChat()
             maybeStartStreaming()
         }
@@ -273,11 +274,9 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
             }
         }
         rtmpUrl = null
+        rotating = false
         stopLiveChat()
-        stopBtn.isEnabled = false
-        muteBtn.isEnabled = false
-        pauseBtn.isEnabled = false
-        goBtn.isEnabled = true
+        setStreamingUi(false)
         statusLabel.text = "Stopped"
     }
 
@@ -486,25 +485,32 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     }
 
     // ConnectChecker callbacks (called on the stream's thread).
-    override fun onConnectionStarted(url: String) {}
+    override fun onConnectionStarted(url: String) {
+        runOnUiThread { if (rotating) statusLabel.text = "Reconnecting…" }
+    }
     override fun onConnectionSuccess() {
-        runOnUiThread { statusLabel.text = "Live" }
+        rotating = false
+        runOnUiThread {
+            setStreamingUi(true)
+            statusLabel.text = "Live"
+        }
     }
     override fun onConnectionFailed(reason: String) {
+        rotating = false
         runOnUiThread {
+            setStreamingUi(false)
             statusLabel.text = "Stream failed: $reason"
-            stopBtn.isEnabled = false
-            muteBtn.isEnabled = false
-            pauseBtn.isEnabled = false
-            goBtn.isEnabled = true
         }
     }
     override fun onDisconnect() {
         runOnUiThread {
-            stopBtn.isEnabled = false
-            muteBtn.isEnabled = false
-            pauseBtn.isEnabled = false
-            goBtn.isEnabled = true
+            // A clean stop during a rotation restart is expected - the reconnect
+            // restores the live UI. Don't flip to the stopped state for it.
+            if (rotating) {
+                statusLabel.text = "Rotating…"
+                return@runOnUiThread
+            }
+            setStreamingUi(false)
             statusLabel.text = "Disconnected"
         }
     }
@@ -513,5 +519,13 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     }
     override fun onAuthSuccess() {
         runOnUiThread { statusLabel.text = "Authenticated" }
+    }
+
+    /** Set the broadcast controls to match the live/stopped state. */
+    private fun setStreamingUi(live: Boolean) {
+        stopBtn.isEnabled = live
+        muteBtn.isEnabled = live
+        pauseBtn.isEnabled = live
+        goBtn.isEnabled = !live
     }
 }
