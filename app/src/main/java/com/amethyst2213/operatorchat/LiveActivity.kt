@@ -140,11 +140,34 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     /** Prepare the encoder/stream once (kept alive across rotations). */
     private fun prepareStream(): RtmpStream {
         return RtmpStream(this, this).apply {
-            // Follow the phone's physical orientation (portrait or landscape).
+            // Encode in the phone's current physical orientation so the stream
+            // (and the recording) matches how the phone is held: portrait ->
+            // 360x640, landscape -> 640x360. autoHandleOrientation keeps the
+            // content upright within that frame.
             getGlInterface().autoHandleOrientation = true
-            prepareVideo(640, 360, 800 * 1000)
+            val portrait = resources.configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_PORTRAIT
+            prepareVideo(if (portrait) 360 else 640, if (portrait) 640 else 360, 800 * 1000)
             prepareAudio(32000, true, 64 * 1000)
         }
+    }
+
+    /** When the phone is rotated mid-broadcast, restart the encoder at the new
+     *  orientation so the stream keeps matching how the device is held. */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val s = stream ?: return
+        val url = rtmpUrl ?: return
+        if (!s.isStreaming || !surfaceReady) return
+        try {
+            s.stopStream()
+            s.release()
+        } catch (_: Exception) {
+        }
+        stream = null
+        statusLabel.text = "Rotating…"
+        maybeStartPreview()
+        maybeStartStreaming()
     }
 
     /** Create the stream + camera preview (does not broadcast). */
