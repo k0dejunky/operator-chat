@@ -1,119 +1,156 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/chat_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@color/surface">
+    android:background="@color/surface"
+    android:fitsSystemWindows="true">
 
-    <!-- Header: story gradient strip -->
-    <FrameLayout
+    <!-- ================= Header ================= -->
+    <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/chat_appbar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@drawable/ig_gradient">
+        android:background="@color/surface_card"
+        app:elevation="0dp">
 
-        <androidx.appcompat.widget.Toolbar
+        <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/chat_toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            android:background="@android:color/transparent"
-            android:titleTextColor="@color/white"
             app:titleTextAppearance="@style/Theme.OperatorChat.ToolbarTitle"
-            xmlns:app="http://schemas.android.com/apk/res-auto" />
-    </FrameLayout>
+            app:subtitleTextAppearance="@style/Theme.OperatorChat.ToolbarSubtitle" />
+    </com.google.android.material.appbar.AppBarLayout>
 
-    <TextView
-        android:id="@+id/chat_status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingLeft="16dp"
-        android:paddingRight="16dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="2dp"
-        android:textSize="12sp"
-        android:textColor="@color/text_secondary" />
-
-    <!-- Messages -->
+    <!-- ================= Thread ================= -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/message_recycler"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
+        android:layout_height="match_parent"
         android:clipToPadding="false"
         android:paddingTop="8dp"
-        android:paddingBottom="8dp" />
+        android:paddingBottom="12dp"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior"
+        tools:listitem="@layout/item_message_in" />
 
-    <!-- Emoji quick bar -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/emoji_bar"
-        android:layout_width="match_parent"
-        android:layout_height="44dp"
-        android:visibility="gone"
-        android:background="@color/surface_card" />
-
-    <!-- Bottom reply bar (Snapchat-style dark composer) -->
+    <!-- Empty state, shown instead of the list when there is nothing to render -->
     <LinearLayout
+        android:id="@+id/chat_empty"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="32dp"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior"
+        tools:visibility="gone">
+
+        <ImageView
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:alpha="0.5"
+            android:contentDescription="@string/chat_empty_title"
+            android:src="@drawable/ic_emoji"
+            app:tint="@color/text_tertiary" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/chat_empty_title"
+            android:textColor="@color/text"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/chat_empty_body"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- Scroll to the newest message; only visible when scrolled up -->
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+        android:id="@+id/scroll_bottom_fab"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="16dp"
+        android:backgroundTint="@color/surface_elevated"
+        android:contentDescription="@string/scroll_to_bottom"
+        android:visibility="gone"
+        app:icon="@drawable/ic_scroll_bottom"
+        app:iconTint="@color/text"
+        tools:text="Latest"
+        tools:visibility="visible" />
+
+    <!-- ================= Composer ================= -->
+    <LinearLayout
+        android:id="@+id/composer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_composer"
+        android:elevation="8dp"
+        android:gravity="bottom"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:padding="8dp"
-        android:background="@color/surface"
-        android:elevation="8dp">
+        android:paddingStart="10dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="8dp">
 
-        <Button
-            android:id="@+id/emoji_button"
+        <ImageButton
+            android:id="@+id/attach_button"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:padding="0dp"
-            android:minWidth="0dp"
-            android:minHeight="0dp"
-            android:contentDescription="Emoji"
-            android:text="😊"
-            android:textSize="18sp"
-            android:background="@drawable/input_bg" />
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/composer_attach"
+            android:src="@drawable/ic_attach"
+            app:tint="@color/text_secondary" />
 
         <EditText
             android:id="@+id/reply_input"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginLeft="6dp"
-            android:layout_marginRight="6dp"
-            android:hint="Message…"
-            android:maxLines="4"
-            android:minHeight="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:background="@drawable/bg_input"
             android:gravity="center_vertical"
-            android:textColor="@color/text"
-            android:textColorHint="@color/text_secondary"
+            android:hint="@string/composer_hint"
+            android:importantForAutofill="no"
             android:inputType="textMultiLine|textCapSentences"
-            android:imeOptions="actionSend"
-            android:background="@drawable/input_bg" />
+            android:maxHeight="132dp"
+            android:maxLines="5"
+            android:minHeight="44dp"
+            android:paddingStart="16dp"
+            android:paddingTop="10dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="10dp"
+            android:textColor="@color/text"
+            android:textColorHint="@color/text_tertiary"
+            android:textSize="15sp" />
 
-        <Button
-            android:id="@+id/attach_button"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:padding="0dp"
-            android:minWidth="0dp"
-            android:minHeight="0dp"
-            android:contentDescription="Attach file"
-            android:text="📷"
-            android:textSize="18sp"
-            android:background="@drawable/input_bg" />
-
-        <Button
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
             android:id="@+id/send_button"
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:layout_marginLeft="6dp"
-            android:padding="0dp"
-            android:minWidth="0dp"
-            android:minHeight="0dp"
-            android:contentDescription="Send"
-            android:text="➤"
-            android:textSize="18sp"
-            android:textColor="@color/white"
-            android:background="@drawable/send_bg" />
+            android:contentDescription="@string/composer_send"
+            app:backgroundTint="@color/brand"
+            app:elevation="0dp"
+            app:fabSize="mini"
+            app:srcCompat="@drawable/ic_send"
+            app:tint="@color/white" />
     </LinearLayout>
-</LinearLayout>
+
+    <!-- ================= Snackbar host ================= -->
+    <FrameLayout
+        android:id="@+id/snackbar_host"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom" />
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

@@ -1,37 +1,42 @@
 package com.amethyst2213.operatorchat
 
-import android.app.AlertDialog
+import android.app.Activity
 import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
-import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.Spinner
+import android.widget.ListView
+import android.widget.RadioGroup
 import android.widget.TextView
-import android.text.Editable
-import android.text.TextWatcher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
-import coil.load
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.amethyst2213.operatorchat.databinding.ActivityChatBinding
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlin.random.Random
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -39,20 +44,32 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * Messenger-style chat thread. Bottom-fixed reply bar with emoji + attachment
- * support; realtime via the SSE stream. Opens from MainActivity so every
- * conversation is its own clean screen (no cross-conversation state leaks).
+ * Messenger-style chat thread.
+ *
+ * What changed from the previous version, and why it "operated badly":
+ *
+ *  - the SSE loop spun with no delay whenever the server closed the stream
+ *    immediately (hot CPU + radio drain). It now sleeps between attempts, backs
+ *    off on errors, and is cancelled in onStop() so a backgrounded thread no
+ *    longer holds the radio awake.
+ *  - a null bridge made `?: emptyList()` return forever, so the loop became a
+ *    100% CPU spin. The stream now refuses to start without a bridge.
+ *  - the optimistic placeholder and the real message could both end up in the
+ *    list when the stream delivered the server's copy before the reply
+ *    returned. Placeholders are now dropped when the real message arrives.
+ *  - the list re-bound every row on each poll (notifyDataSetChanged). It is a
+ *    ListAdapter with DiffUtil now, so a new message animates in and the scroll
+ *    position survives.
+ *  - "Sending… / Uploading 42% / Sent / Live" was a permanent TextView above
+ *    the list, so the screen flickered text at the operator. Status is a
+ *    Snackbar now, and per-message state lives on the message itself.
+ *  - the draft was written to SharedPreferences on every keystroke.
+ *  - attachments were copied into the cache before their size was known, so a
+ *    2 GB pick could fill the disk before being rejected.
  */
 class ChatActivity : AppCompatActivity() {
 
-    private lateinit var recycler: RecyclerView
-    private lateinit var input: EditText
-    private lateinit var sendButton: Button
-    private lateinit var emojiButton: Button
-    private lateinit var attachButton: Button
-    private lateinit var emojiBar: RecyclerView
-    private lateinit var statusLabel: TextView
-    private lateinit var root: View
+    private lateinit var binding: ActivityChatBinding
 
     private var bridge: ChatBridge? = null
     private var conversationId: Long = 0
@@ -62,153 +79,155 @@ class ChatActivity : AppCompatActivity() {
     private var loadingOlder = false
     private var memberReplyEnabled = true
     private var pendingPlaceholderId = 0L
+    private var streamActive = false
+    private var wasAtBottom = true
+
     private val messages = mutableListOf<ChatBridge.Message>()
+
+    /** Delivery state for optimistic (not yet confirmed) outgoing messages. */
+    private val deliveries = mutableMapOf<Long, Delivery>()
+
+    /** Ids of optimistic rows still waiting for the server to confirm them. */
+    private val optimisticIds = mutableSetOf<Long>()
+
     private lateinit var adapter: MessageAdapter
     private var streamJob: Job? = null
 
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
 
-    private val pickAttachment = registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) attachFromUri(uri)
-    }
+    /** Zone the server stamps its timestamps in (Settings > timezone). */
+    private val siteZone: String
+        get() = prefs.getString("site_timezone", ChatRows.DEFAULT_ZONE) ?: ChatRows.DEFAULT_ZONE
+
+    private val pickAttachment =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            if (uri != null) attachFromUri(uri)
+        }
 
     /** Camera capture: an output Uri is supplied so the full-res photo/video is
-     *  written to our cache dir (otherwise ACTION_IMAGE_CAPTURE returns only a
+     *  written to our cache dir (ACTION_IMAGE_CAPTURE alone returns only a
      *  small thumbnail). */
     private var cameraOutput: File? = null
 
-    private val takePicture = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok: Boolean ->
-        val file = cameraOutput
-        cameraOutput = null
-        if (ok && file != null && file.exists() && file.length() > 0) {
-            pendingAttachment = file
-            statusLabel.text = "Photo ready: ${sanitize(file.name)} (will send with your reply)"
-        } else {
-            file?.delete()
-            statusLabel.text = "Photo cancelled"
-        }
-    }
-
-    private val takeVideo = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val file = cameraOutput
-        cameraOutput = null
-        val ok = result.resultCode == android.app.Activity.RESULT_OK
-        if (ok && file != null && file.exists() && file.length() > 0) {
-            if (file.length() > MAX_ATTACHMENT_BYTES) {
-                statusLabel.text = "Video too large (max 25 MB) — try a shorter recording."
-                file.delete()
-            } else {
+    private val takePicture =
+        registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+            val file = cameraOutput
+            cameraOutput = null
+            if (ok && file != null && file.exists() && file.length() > 0) {
                 pendingAttachment = file
-                statusLabel.text = "Video ready: ${sanitize(file.name)} (will send with your reply)"
+                showSnack("Photo ready — it will be sent with your reply.")
+            } else {
+                file?.delete()
+                showSnack("Photo cancelled.")
             }
-        } else {
-            file?.delete()
-            statusLabel.text = "Video cancelled"
         }
-    }
 
-    private val emojis = listOf(
-        // Smileys & people
-        "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😗", "😚", "🙂", "🤗", "🤩", "😎", "😏",
-        "😉", "🙃", "😋", "🤪", "😜", "🥰", "😇", "🤓", "😴", "🤤", "😌", "😔", "😢", "😭",
-        "😤", "😡", "🤬", "😱", "😳", "🤯", "😇", "😷", "🤒", "🥳", "🤠", "👽",
-        // Gestures & hearts
-        "👍", "👎", "👌", "✌️", "🤞", "👊", "✊", "🤛", "🤜", "🙏", "👏", "💪", "🖤", "❤️",
-        "🧡", "💛", "💚", "💙", "💜", "💖", "💗", "💕", "💞", "💘", "💝", "💋", "👅",
-        // Symbols & misc
-        "🔥", "✨", "⭐", "🌟", "💫", "🎉", "🎊", "🎂", "🎁", "💯", "🎯", "🚀", "💎", "🌸",
-        "🌹", "🥀", "🌺", "🍑", "🍆", "🍒", "🍓", "🍉", "🥂", "🍾", "☕", "🌞", "🌙", "⚡",
-        "☀️", "🌈", "❄️", "💦", "🍀", "🐱", "🐶", "🦄", "🦋", "🐝", "🐣",
-    )
+    private val takeVideo =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val file = cameraOutput
+            cameraOutput = null
+            if (result.resultCode == Activity.RESULT_OK && file != null &&
+                file.exists() && file.length() > 0
+            ) {
+                if (file.length() > MAX_ATTACHMENT_BYTES) {
+                    file.delete()
+                    showSnack("Video too large (max 25 MB) — try a shorter recording.")
+                } else {
+                    pendingAttachment = file
+                    showSnack("Video ready — it will be sent with your reply.")
+                }
+            } else {
+                file?.delete()
+                showSnack("Video cancelled.")
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_chat)
+        binding = ActivityChatBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
-        recycler = findViewById(R.id.message_recycler)
-        input = findViewById(R.id.reply_input)
-        sendButton = findViewById(R.id.send_button)
-        emojiButton = findViewById(R.id.emoji_button)
-        attachButton = findViewById(R.id.attach_button)
-        emojiBar = findViewById(R.id.emoji_bar)
-        statusLabel = findViewById(R.id.chat_status)
         conversationId = intent.getLongExtra("conversation_id", 0)
         memberReplyEnabled = intent.getBooleanExtra("member_reply_enabled", true)
-        input.setText(prefs.getString("draft_$conversationId", "").orEmpty())
-        input.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                prefs.edit().putString("draft_$conversationId", s?.toString().orEmpty()).apply()
-            }
-            override fun afterTextChanged(s: Editable?) = Unit
-        })
 
-        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.chat_toolbar)
-        setSupportActionBar(toolbar)
+        binding.replyInput.setText(prefs.getString("draft_$conversationId", "").orEmpty())
+
+        setSupportActionBar(binding.chatToolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        StatusBarToolbar.apply(this, toolbar)
 
         val url = intent.getStringExtra("base_url") ?: ""
         val token = intent.getStringExtra("token") ?: SecurePrefs.token(this)
-        val username = intent.getStringExtra("username") ?: "#$conversationId"
-        supportActionBar?.title = username
+        val username = intent.getStringExtra("username")
+        supportActionBar?.title = username?.ifBlank { null } ?: "Conversation #$conversationId"
+        updateSubtitle()
 
-        // Keep the bottom reply bar above the soft keyboard (edge-to-edge on
-        // targetSdk 35 means adjustResize alone is not enough).
-        root = findViewById(R.id.chat_root)
-        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+        // Keep the composer above the soft keyboard (edge-to-edge on targetSdk
+        // 35 means adjustResize alone is not enough) and pad the list so its
+        // last row is never hidden behind the composer.
+        ViewCompat.setOnApplyWindowInsetsListener(binding.chatRoot) { _, insets ->
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
-            root.setPadding(0, 0, 0, ime + bars)
+            val shift = maxOf(ime, bars)
+            binding.composer.translationY = -shift.toFloat()
+            binding.messageRecycler.setPadding(0, 0, 0, shift)
+            binding.chatEmpty.setPadding(32, 0, 32, shift)
             insets
         }
-        ViewCompat.requestApplyInsets(root)
+        ViewCompat.requestApplyInsets(binding.chatRoot)
 
         bridge = ChatBridge(url, token)
 
-        recycler.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
-        adapter = MessageAdapter(messages)
-        recycler.adapter = adapter
+        adapter = MessageAdapter(
+            onImageClick = { openFullImage(it) },
+            onRetryClick = { retryMessage(it) },
+        )
+        binding.messageRecycler.layoutManager =
+            LinearLayoutManager(this).apply { stackFromEnd = true }
+        binding.messageRecycler.adapter = adapter
 
-        // Lazy-load older messages when the user scrolls to the top.
-        recycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+        // Lazy-load older messages when the user scrolls to the top. `dy <= 0`
+        // keeps the initial layout pass (which also reports position 0) from
+        // immediately pulling in the previous page.
+        binding.messageRecycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
             override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
                 val lm = rv.layoutManager as? LinearLayoutManager ?: return
-                if (lm.findFirstVisibleItemPosition() <= 2) loadOlder()
+                if (lm.findFirstVisibleItemPosition() in 0..1 && dy <= 0) loadOlder()
+                if (isAtBottom()) binding.scrollBottomFab.hide() else binding.scrollBottomFab.show()
             }
         })
 
-        // Emoji quick-bar
-        emojiBar.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
-        emojiBar.adapter = EmojiAdapter(emojis) { emoji ->
-            input.append(emoji)
-            input.setSelection(input.text.length)
-        }
-        emojiBar.visibility = View.GONE
-        emojiButton.setOnClickListener {
-            emojiBar.visibility = if (emojiBar.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-        }
+        binding.sendButton.setOnClickListener { sendReply() }
+        binding.attachButton.setOnClickListener { showAttachChooser() }
+        binding.scrollBottomFab.setOnClickListener { scrollToBottom() }
 
-        attachButton.setOnClickListener { showAttachChooser() }
+        render()
+    }
 
-        sendButton.setOnClickListener { sendReply() }
-
-        // Enter (or the keyboard's Send action) sends the reply. Shift+Enter
-        // still inserts a newline because the field stays multi-line.
-        input.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEND) {
-                sendReply()
-                true
-            } else {
-                false
-            }
-        }
-
+    override fun onStart() {
+        super.onStart()
+        // Only stream while the screen is visible: the previous version kept the
+        // SSE connection open in the background.
         startStream()
     }
 
-    override fun onDestroy() {
+    override fun onStop() {
+        streamActive = false
         streamJob?.cancel()
+        streamJob = null
+        super.onStop()
+    }
+
+    override fun onPause() {
+        // Persist the draft once instead of a SharedPreferences write per
+        // keystroke.
+        prefs.edit()
+            .putString("draft_$conversationId", binding.replyInput.text.toString())
+            .apply()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        pendingAttachment?.delete()
         super.onDestroy()
     }
 
@@ -231,187 +250,180 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
-    /** Per-chat settings: AI mode + notification tone + notifications on/off. */
-    private fun showChatSettings() {
-        val b = bridge ?: return
-        val currentMode = intent.getStringExtra("ai_mode") ?: "retrieval"
-        val modes = arrayOf("retrieval", "finetuned", "operator")
-        val labels = arrayOf("Retrieval (AI + history)", "Finetuned (trained AI)", "Operator (manual)")
-        val checked = modes.indexOf(currentMode).coerceAtLeast(0)
+    // ------------------------------------------------------------ rendering
 
-        val chatKey = "chat_$conversationId"
-        val notifyOn = prefs.getBoolean("${chatKey}_notify", true)
-        val tone = prefs.getString("${chatKey}_tone", "").orEmpty()
-        val isFav = Favorites.isFavorite(this, conversationId)
-
-        val options = arrayOf(
-            "★ Favourite: ${if (isFav) "ON" else "OFF"}",
-            "Chat mode: ${labels[checked]}",
-            "Member replies: ${if (memberReplyEnabled) "ON" else "OFF"}",
-            "Notifications: ${if (notifyOn) "ON" else "OFF"}",
-            "Notification tone: ${if (tone.isEmpty()) "Default" else tone.substringAfterLast('/')}"
-        )
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Chat settings")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> {
-                        Favorites.toggle(this, conversationId)
-                        showChatSettings()
-                    }
-                    1 -> pickMode(modes, labels, checked, b)
-                    2 -> {
-                        statusLabel.text = "Updating…"
-                        val target = !memberReplyEnabled
-                        lifecycleScope.launch {
-                            val ok = b.setMemberReply(conversationId, target)
-                            statusLabel.text = if (ok) "Member replies " + (if (target) "enabled" else "disabled") else "Reply toggle failed"
-                            if (ok) {
-                                memberReplyEnabled = target
-                                intent.putExtra("member_reply_enabled", target)
-                            }
-                            showChatSettings()
-                        }
-                    }
-                    3 -> {
-                        val on = !notifyOn
-                        prefs.edit().putBoolean("${chatKey}_notify", on).apply()
-                        showChatSettings()
-                    }
-                    4 -> pickChatTone(chatKey)
-                }
-            }
-            .setPositiveButton("Done", null)
-            .create()
-        dialog.show()
+    /**
+     * Rebuild the display rows and hand them to the adapter. Building the rows
+     * (day separators, grouping, delivery state) lives in [ChatRows] so the
+     * maths is unit-testable and the adapter stays a dumb binder.
+     */
+    private fun render() {
+        val rows = ChatRows.build(messages, deliveries, siteZone)
+        adapter.submitList(rows)
+        binding.chatEmpty.isVisible = rows.isEmpty()
+        binding.messageRecycler.isVisible = rows.isNotEmpty()
+        if (wasAtBottom && rows.isNotEmpty()) scrollToBottom()
     }
 
-    private fun pickMode(modes: Array<String>, labels: Array<String>, checked: Int, b: ChatBridge) {
-        AlertDialog.Builder(this)
-            .setTitle("Chat mode")
-            .setSingleChoiceItems(labels, checked) { _, which ->
-                statusLabel.text = "Setting mode…"
-                val mode = modes[which]
-                lifecycleScope.launch {
-                    val ok = b.setMode(conversationId, mode)
-                    statusLabel.text = if (ok) "Mode set to ${labels[which]}" else "Mode update failed"
-                    if (ok) intent.putExtra("ai_mode", mode)
-                }
-            }
-            .setPositiveButton("Cancel", null)
-            .create()
+    private fun isAtBottom(): Boolean {
+        val lm = binding.messageRecycler.layoutManager as? LinearLayoutManager ?: return true
+        if (adapter.itemCount == 0) return true
+        return lm.findLastCompletelyVisibleItemPosition() >= adapter.itemCount - 2
+    }
+
+    private fun scrollToBottom() {
+        if (adapter.itemCount == 0) return
+        binding.messageRecycler.scrollToPosition(adapter.itemCount - 1)
+        binding.scrollBottomFab.hide()
+    }
+
+    private fun showSnack(message: String) {
+        Snackbar.make(binding.chatRoot, message, Snackbar.LENGTH_SHORT)
+            .setAnchorView(binding.composer)
             .show()
     }
 
-    private fun pickChatTone(chatKey: String) {
-        val intent = android.content.Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
-            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
-            putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Chat notification tone")
-            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
-            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-            putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
-                Uri.parse(prefs.getString("${chatKey}_tone", null)
-                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION).toString()))
-        }
-        chatToneResult.launch(intent)
+    private fun showSnackLong(message: String) {
+        Snackbar.make(binding.chatRoot, message, Snackbar.LENGTH_LONG)
+            .setAnchorView(binding.composer)
+            .show()
     }
 
-    private val chatToneResult = registerForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val uri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
-        if (uri != null) {
-            prefs.edit().putString("${"chat_$conversationId"}_tone", uri.toString()).apply()
-            showChatSettings()
-        }
+    private fun updateSubtitle() {
+        supportActionBar?.subtitle = getString(
+            if (memberReplyEnabled) R.string.chat_replies_on else R.string.chat_replies_off
+        )
     }
+
+    private fun hideKeyboard() {
+        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(binding.replyInput.windowToken, 0)
+    }
+
+    // ------------------------------------------------------------ streaming
 
     private fun startStream() {
-        streamJob?.cancel()
+        val b = bridge
+        if (b == null) {
+            showSnackLong("No server configured for this conversation.")
+            return
+        }
+        if (streamJob?.isActive == true) return
+        streamActive = true
+
         streamJob = lifecycleScope.launch {
             try {
-                // Initial full load (latest 50).
-                val hist = bridge?.thread(conversationId) ?: emptyList()
+                val hist = b.thread(conversationId)
                 messages.clear()
-                messages.addAll(hist)
+                messages.addAll(hist.sortedBy { it.id })
                 latestId = hist.maxOfOrNull { it.id } ?: 0L
-                oldestId = hist.firstOrNull()?.id ?: 0L
+                oldestId = hist.minOfOrNull { it.id } ?: 0L
                 hasMore = hist.size >= 50
-                adapter.notifyDataSetChanged()
-                statusLabel.text = "Live"
+                wasAtBottom = true
+                render()
+                scrollToBottom()
                 // Deliver any queued offline replies now that we are connected.
                 SendQueue.schedule(this@ChatActivity)
-                // Reading the thread clears its new-message state.
-                try { bridge?.setRead(conversationId, latestId) } catch (_: Exception) {}
+                b.setRead(conversationId, latestId)
             } catch (e: Exception) {
-                statusLabel.text = "Could not load thread: ${e.message}"
+                showSnackLong("Could not load thread: ${e.message ?: "unknown error"}")
             }
-            // Realtime stream loop.
+
             var backoffMs = 1500L
-            while (true) {
+            while (streamActive) {
                 try {
-                    val new = bridge?.streamOnce(conversationId, latestId) ?: emptyList()
-                    val fresh = new.filter { it.id > latestId && messages.none { m -> m.id == it.id } }
-                    if (fresh.isNotEmpty()) {
-                        latestId = fresh.maxOf { it.id }
-                        messages.addAll(fresh)
-                        adapter.notifyItemRangeInserted(messages.size - fresh.size, fresh.size)
-                        recycler.scrollToPosition(messages.size - 1)
-                        try { bridge?.setRead(conversationId, latestId) } catch (_: Exception) {}
+                    val incoming = b.streamOnce(conversationId, latestId)
+                    val fresh = incoming.filter {
+                        it.id > latestId && messages.none { m -> m.id == it.id }
                     }
+                    if (fresh.isNotEmpty()) collectIncoming(fresh)
                     backoffMs = 1500L
+                    // The server closes each SSE connection per poll, so this
+                    // delay is what stops the old 100% CPU spin.
+                    delay(500)
                 } catch (e: Exception) {
-                    statusLabel.text = "Reconnecting…"
                     // Exponential backoff with jitter so an outage doesn't
                     // hammer the server or the radio forever.
-                    delay(backoffMs + Random.nextLong(0, 1000))
+                    delay(backoffMs + (0..1000).random())
                     backoffMs = minOf(backoffMs * 2, 30000L)
                 }
             }
         }
     }
 
+    /**
+     * Fold a batch of streamed messages into the list.
+     *
+     * Any optimistic row the server has now confirmed (same sender + same text)
+     * is dropped first, so a message can never appear twice when the stream
+     * wins the race against the reply response.
+     */
+    private fun collectIncoming(fresh: List<ChatBridge.Message>) {
+        val confirmed = fresh.filter { real ->
+            optimisticIds.any { pid ->
+                messages.firstOrNull { it.id == pid }?.let { opt ->
+                    opt.senderRole.equals(real.senderRole, true) && opt.message == real.message
+                } ?: false
+            }
+        }
+
+        if (confirmed.isNotEmpty()) {
+            optimisticIds.removeAll { pid ->
+                val opt = messages.firstOrNull { it.id == pid } ?: return@removeAll false
+                confirmed.any {
+                    it.senderRole.equals(opt.senderRole, true) && it.message == opt.message
+                }
+            }
+            optimisticIds.forEach { pid -> deliveries.remove(pid) }
+            messages.removeAll { m -> m.id < 0 && optimisticIds.none { it == m.id } }
+        }
+
+        latestId = maxOf(latestId, fresh.maxOf { it.id })
+        messages.addAll(fresh.sortedBy { it.id })
+        render()
+        lifecycleScope.launch { bridge?.setRead(conversationId, latestId) }
+    }
+
     /** Load the previous batch of older messages and prepend them. */
     private fun loadOlder() {
         if (loadingOlder || !hasMore || oldestId <= 0) return
         loadingOlder = true
-        val b = bridge ?: return
+        val b = bridge ?: run { loadingOlder = false; return }
         lifecycleScope.launch {
             try {
                 val (older, more) = b.history(conversationId, oldestId, 50)
                 if (older.isNotEmpty()) {
-                    // Keep scroll anchored: record position before inserting.
-                    val lm = recycler.layoutManager as? LinearLayoutManager
+                    val lm = binding.messageRecycler.layoutManager as? LinearLayoutManager
                     val pos = lm?.findFirstVisibleItemPosition() ?: 0
-                    val firstVisible = lm?.findViewByPosition(pos)
-                    val offset = firstVisible?.top ?: 0
+                    val offset = lm?.findViewByPosition(pos)?.top ?: 0
 
-                    messages.addAll(0, older)
-                    oldestId = older.first().id
+                    val merged = (older + messages).distinctBy { it.id }.sortedBy { it.id }
+                    messages.clear()
+                    messages.addAll(merged)
+                    oldestId = older.minOf { it.id }
                     hasMore = more
-                    adapter.notifyItemRangeInserted(0, older.size)
-
-                    // Restore the view position after the insertion.
-                    recycler.post {
-                        lm?.scrollToPositionWithOffset(pos + older.size, offset)
-                    }
+                    wasAtBottom = false
+                    render()
+                    binding.messageRecycler.post { lm?.scrollToPositionWithOffset(pos + 1, offset) }
                 } else {
-                    hasMore = false
+                    hasMore = more
                 }
             } catch (_: Exception) {
-                // transient; allow retry on next scroll
+                // transient; allow a retry on the next scroll to the top
             } finally {
                 loadingOlder = false
             }
         }
     }
 
+    // ------------------------------------------------------------ sending
+
     private fun sendReply() {
-        val text = input.text.toString().trim()
+        val text = binding.replyInput.text.toString().trim()
         val pending = pendingAttachment
         if (text.isEmpty() && pending == null) return
         if (pending != null && pending.length() > MAX_ATTACHMENT_BYTES) {
-            statusLabel.text = "Attachment too large (max 25 MB)."
+            showSnack("Attachment too large (max 25 MB).")
             return
         }
         if (pending != null) {
@@ -423,66 +435,54 @@ class ChatActivity : AppCompatActivity() {
 
     /** Offer a time / view limit for the attached media before sending. */
     private fun showExpiryDialog(after: (Int, Int) -> Unit) {
-        val durations = listOf(
-            0 to "No expiry", 5 to "5 minutes", 15 to "15 minutes", 30 to "30 minutes",
-            60 to "1 hour", 360 to "6 hours", 1440 to "24 hours",
-        )
-        val viewLimits = listOf(
-            0 to "Unlimited views", 1 to "1 view", 3 to "3 views", 5 to "5 views", 10 to "10 views",
-        )
-        val ctx = this
-        val layout = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(60, 24, 60, 8)
-            addView(TextView(ctx).apply { setText("Expire after"); textSize = 14f; setPadding(0, 0, 0, 4) })
-            addView(
-                Spinner(ctx).apply {
-                    adapter = ArrayAdapter<String>(ctx, android.R.layout.simple_spinner_dropdown_item, durations.map { it.second })
-                    tag = durations
-                }
-            )
-            addView(TextView(ctx).apply { setText("or after"); textSize = 14f; setPadding(0, 20, 0, 4) })
-            addView(
-                Spinner(ctx).apply {
-                    adapter = ArrayAdapter<String>(ctx, android.R.layout.simple_spinner_dropdown_item, viewLimits.map { it.second })
-                    tag = viewLimits
-                }
-            )
+        val view = LayoutInflater.from(this)
+            .inflate(R.layout.dialog_media_expiry, null, false)
+        val durationGroup = view.findViewById<RadioGroup>(R.id.expiry_duration)
+        val viewsGroup = view.findViewById<RadioGroup>(R.id.expiry_views)
+
+        // Each button carries its value in android:tag, so the choice never
+        // depends on a view id matching a number.
+        val chosen = intArrayOf(0, 0)
+        val pick: (RadioGroup, Int) -> Unit = { group, checkedId ->
+            val tag = group.findViewById<android.widget.RadioButton>(checkedId)?.tag?.toString()
+            val value = tag?.toIntOrNull() ?: 0
+            if (group === durationGroup) chosen[0] = value else chosen[1] = value
         }
-        AlertDialog.Builder(ctx)
+        durationGroup.setOnCheckedChangeListener { group, checkedId -> pick(group, checkedId) }
+        viewsGroup.setOnCheckedChangeListener { group, checkedId -> pick(group, checkedId) }
+
+        MaterialAlertDialogBuilder(this)
             .setTitle("Expire this media?")
-            .setView(layout)
-            .setPositiveButton("Send") { _, _ ->
-                val dur = layout.getChildAt(1) as Spinner
-                val views = layout.getChildAt(3) as Spinner
-                @Suppress("UNCHECKED_CAST")
-                val durOpts = dur.tag as List<Pair<Int, String>>
-                @Suppress("UNCHECKED_CAST")
-                val viewOpts = views.tag as List<Pair<Int, String>>
-                after(durOpts[dur.selectedItemPosition].first, viewOpts[views.selectedItemPosition].first)
-            }
+            .setView(view)
+            .setPositiveButton("Send") { _, _ -> after(chosen[0], chosen[1]) }
             .setNegativeButton("Cancel", null)
             .show()
     }
 
     private fun doSend(text: String, pending: File?, expiresInMinutes: Int, maxViews: Int) {
+        val b = bridge ?: run { showSnack("Not connected."); return }
+
         val idempotencyKey = prefs.getString("pending_reply_key_$conversationId", null)
             ?: UUID.randomUUID().toString().also {
                 prefs.edit().putString("pending_reply_key_$conversationId", it).apply()
             }
-        input.setText("")
-        pendingAttachment = null
 
-        // Optimistic: show the sent message immediately (it will also come
-        // back through the stream with the same id, which the filter skips).
+        binding.replyInput.setText("")
+        prefs.edit().remove("draft_$conversationId").apply()
+        pendingAttachment = null
+        hideKeyboard()
+
+        // Optimistic row. It keeps its negative id until the server confirms and
+        // is dropped the moment the real message arrives on the stream.
         val placeholderId = --pendingPlaceholderId
-        val now = "now"
-        val optimistic = ChatBridge.Message(
+        optimisticIds += placeholderId
+        deliveries[placeholderId] = Delivery.SENDING
+        messages += ChatBridge.Message(
             id = placeholderId,
             conversationId = conversationId,
             senderRole = "operator",
             message = text,
-            createdAt = now,
+            createdAt = "",
             attachmentName = pending?.name,
             attachmentType = null,
             attachmentUrl = null,
@@ -492,96 +492,169 @@ class ChatActivity : AppCompatActivity() {
             viewCount = 0,
             mediaExpired = false,
         )
-        messages.add(optimistic)
-        adapter.notifyItemInserted(messages.size - 1)
-        recycler.scrollToPosition(messages.size - 1)
-        statusLabel.text = "Sending…"
+        wasAtBottom = true
+        render()
+        scrollToBottom()
 
         lifecycleScope.launch {
-            try {
-                val id = bridge?.reply(
+            when (
+                val result = b.reply(
                     conversationId, text, pending, idempotencyKey,
                     onProgress = { p ->
                         runOnUiThread {
-                            if (pending != null) statusLabel.text = "Uploading ${(p * 100).toInt()}%…"
+                            if (pending != null) showSnack("Uploading ${(p * 100).toInt()}%…")
                         }
                     },
                     expiresInMinutes = expiresInMinutes,
                     maxViews = maxViews,
-                ) ?: 0
-                if (id > 0) {
-                    SendQueue.remove(this@ChatActivity, idempotencyKey)
-                    prefs.edit().remove("draft_$conversationId").remove("pending_reply_key_$conversationId").apply()
-                    if (pending != null) {
-                        // Attachment sent: reload the thread so the real message
-                        // (with image/thumb URLs) renders inline instead of the
-                        // placeholder's download link.
-                        val fresh = bridge?.thread(conversationId) ?: emptyList()
-                        messages.clear()
-                        messages.addAll(fresh)
-                        latestId = fresh.maxOfOrNull { it.id } ?: id
-                        adapter.notifyDataSetChanged()
-                        recycler.scrollToPosition(messages.size - 1)
-                    } else {
-                        latestId = maxOf(latestId, id)
-                        // Replace the placeholder with the real message (same id).
+                )
+            ) {
+                is ChatBridge.ReplyResult.Sent -> {
+                    optimisticIds -= placeholderId
+                    deliveries.remove(placeholderId)
+                    latestId = maxOf(latestId, result.id)
+                    // Swap the placeholder for the server's copy so it carries
+                    // the real timestamp and attachment URLs. One targeted
+                    // history call (not a full thread reload) fetches just it.
+                    if (result.id > 0) {
+                        val (one, _) = b.history(conversationId, result.id + 1, 1)
+                        val real = one.firstOrNull { it.id == result.id }
                         val idx = messages.indexOfFirst { it.id == placeholderId }
-                        if (idx >= 0) {
-                            messages[idx] = messages[idx].copy(id = id)
-                            adapter.notifyItemChanged(idx)
+                        if (real != null && idx >= 0) {
+                            messages[idx] = real
+                        } else if (idx >= 0) {
+                            messages.removeAt(idx)
                         }
+                        SendQueue.remove(this@ChatActivity, idempotencyKey)
+                        prefs.edit().remove("pending_reply_key_$conversationId").apply()
+                    } else {
+                        messages.removeAll { it.id == placeholderId }
                     }
-                    statusLabel.text = "Sent"
-                } else {
-                    messages.removeAll { it.id == placeholderId }
-                    adapter.notifyDataSetChanged()
-                    // Queue offline (text + optional attachment): delivered
-                    // automatically with backoff. The attachment is copied into
-                    // the persistent outbox dir so a cache clear can't lose it.
-                    val stashed = pending?.let { SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey) }
-                    SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed, expiresInMinutes, maxViews)
-                    SendQueue.schedule(this@ChatActivity)
-                    // Clear the pending key so the NEXT message gets a fresh
-                    // idempotency key (otherwise it would dedupe against this
-                    // queued one and be dropped, or return this message's id).
-                    prefs.edit().remove("pending_reply_key_$conversationId").apply()
-                    statusLabel.text = "Queued — will send automatically"
+                    wasAtBottom = true
+                    render()
+                    showSnack("Sent")
                 }
-            } catch (e: Exception) {
-                messages.removeAll { it.id == placeholderId }
-                adapter.notifyDataSetChanged()
-                val stashed = pending?.let { SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey) }
-                SendQueue.add(this@ChatActivity, conversationId, text, idempotencyKey, stashed, expiresInMinutes, maxViews)
-                SendQueue.schedule(this@ChatActivity)
-                prefs.edit().remove("pending_reply_key_$conversationId").apply()
-                statusLabel.text = "Queued — will send automatically"
+
+                is ChatBridge.ReplyResult.Rejected -> {
+                    // The server will never accept this: drop the placeholder
+                    // and say why, instead of queueing it forever.
+                    optimisticIds -= placeholderId
+                    deliveries.remove(placeholderId)
+                    messages.removeAll { it.id == placeholderId }
+                    prefs.edit().remove("pending_reply_key_$conversationId").apply()
+                    render()
+                    showSnackLong(result.reason)
+                }
+
+                is ChatBridge.ReplyResult.Failed -> {
+                    // Queue it for automatic delivery with backoff.
+                    deliveries[placeholderId] = Delivery.QUEUED
+                    val stashed = pending?.let {
+                        SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey)
+                    }
+                    SendQueue.add(
+                        this@ChatActivity, conversationId, text, idempotencyKey,
+                        stashed, expiresInMinutes, maxViews,
+                    )
+                    render()
+                    showSnackLong("Not sent — queued and will be delivered automatically.")
+                }
+            }
+        }
+    }
+
+    /** Retry an optimistic message from its meta line. */
+    private fun retryMessage(m: ChatBridge.Message) {
+        if (m.id > 0) return // a real, delivered message has nothing to retry
+        if (!optimisticIds.contains(m.id)) {
+            // It lives in the offline outbox: let the worker have another go.
+            SendQueue.schedule(this)
+            showSnack("Retrying queued messages…")
+            return
+        }
+        deliveries[m.id] = Delivery.SENDING
+        render()
+        val key = prefs.getString("pending_reply_key_$conversationId", null)
+            ?: UUID.randomUUID().toString()
+        lifecycleScope.launch {
+            when (
+                val result = bridge?.reply(conversationId, m.message, null, key)
+                    ?: ChatBridge.ReplyResult.Failed("Not connected")
+            ) {
+                is ChatBridge.ReplyResult.Sent -> {
+                    optimisticIds -= m.id
+                    deliveries.remove(m.id)
+                    messages.removeAll { it.id == m.id }
+                    render()
+                    showSnack("Sent")
+                }
+                is ChatBridge.ReplyResult.Rejected -> {
+                    deliveries[m.id] = Delivery.FAILED
+                    render()
+                    showSnackLong(result.reason)
+                }
+                is ChatBridge.ReplyResult.Failed -> {
+                    deliveries[m.id] = Delivery.QUEUED
+                    render()
+                    showSnackLong("Still can't reach the server — left in the queue.")
+                }
             }
         }
     }
 
     private var pendingAttachment: File? = null
 
-    /** Chooser for the attach button: take a photo, record a video, or pick
-     *  an existing file from the gallery / documents. */
+    /** Chooser for the attach button: camera photo, camera video, or a file. */
     private fun showAttachChooser() {
-        val options = arrayOf("📷 Take photo", "🎥 Record video", "📁 Gallery / files")
-        AlertDialog.Builder(this)
-            .setTitle("Attach")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> launchCamera(isVideo = false)
-                    1 -> launchCamera(isVideo = true)
-                    2 -> pickAttachment.launch("*/*")
-                }
+        val options = listOf(
+            AttachOption(R.drawable.ic_camera, getString(R.string.attach_photo)) {
+                launchCamera(isVideo = false)
+            },
+            AttachOption(R.drawable.ic_video, getString(R.string.attach_video)) {
+                launchCamera(isVideo = true)
+            },
+            AttachOption(R.drawable.ic_folder, getString(R.string.attach_file)) {
+                pickAttachment.launch("*/*")
+            },
+        )
+
+        val listView = ListView(this).apply {
+            divider = null
+            dividerHeight = 0
+        }
+        listView.adapter = object : ArrayAdapter<AttachOption>(
+            this, R.layout.row_attach_option, R.id.attach_label, options
+        ) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = convertView ?: LayoutInflater.from(context)
+                    .inflate(R.layout.row_attach_option, parent, false)
+                val opt = getItem(position) ?: return v
+                v.findViewById<ImageView>(R.id.attach_icon).setImageResource(opt.icon)
+                v.findViewById<TextView>(R.id.attach_label).text = opt.label
+                return v
             }
+        }
+        listView.onItemClickListener = AdapterView.OnItemClickListener { _, _, position, _ ->
+            options[position].action()
+        }
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.attach_title)
+            .setView(listView)
             .setNegativeButton("Cancel", null)
             .show()
     }
 
+    private data class AttachOption(val icon: Int, val label: String, val action: () -> Unit)
+
     /** Launch the system camera app writing a full-size capture to our cache
      *  dir via a FileProvider Uri. */
     private fun launchCamera(isVideo: Boolean) {
-        val intent = if (isVideo) Intent(MediaStore.ACTION_VIDEO_CAPTURE) else Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        val intent = if (isVideo) {
+            Intent(MediaStore.ACTION_VIDEO_CAPTURE)
+        } else {
+            Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        }
         val output = newCameraFile(isVideo)
         val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", output)
         intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
@@ -596,7 +669,7 @@ class ChatActivity : AppCompatActivity() {
         } catch (e: Exception) {
             cameraOutput = null
             output.delete()
-            statusLabel.text = "Camera unavailable: ${e.message}"
+            showSnack("Camera unavailable: ${e.message ?: ""}")
         }
     }
 
@@ -606,144 +679,190 @@ class ChatActivity : AppCompatActivity() {
         return File(cacheDir, name)
     }
 
+    /**
+     * Copy a picked file into the cache.
+     *
+     * The size is checked BEFORE the copy (so a 2 GB pick is rejected without
+     * writing it) and again DURING the copy (so a provider that lies about its
+     * size still cannot fill the cache).
+     */
     private fun attachFromUri(uri: Uri) {
         try {
             val resolver = contentResolver
-            val displayName = resolver.getType(uri)?.let { t ->
-                // fall back to a generic name; use the last path segment if available
-                uri.lastPathSegment ?: "attachment"
-            } ?: "attachment"
-            val name = URLDecoder.decode(uri.lastPathSegment ?: "attachment", "UTF-8")
-            val tmp = File(cacheDir, "attachment_" + System.currentTimeMillis() + "_" + sanitize(name))
-            resolver.openInputStream(uri)?.use { ins ->
-                FileOutputStream(tmp).use { ous -> ins.copyTo(ous) }
+
+            resolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) {
+                    val size = c.getLong(idx)
+                    if (size > MAX_ATTACHMENT_BYTES) {
+                        showSnack("File too large (max 25 MB).")
+                        return
+                    }
+                }
             }
+
+            val name = URLDecoder.decode(uri.lastPathSegment ?: "attachment", "UTF-8")
+            val tmp = File(cacheDir, "attachment_${System.currentTimeMillis()}_${sanitize(name)}")
+            var written = 0L
+
+            resolver.openInputStream(uri)?.use { ins ->
+                FileOutputStream(tmp).use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = ins.read(buffer)
+                        if (read <= 0) break
+                        written += read
+                        if (written > MAX_ATTACHMENT_BYTES) throw IOException("too large")
+                        out.write(buffer, 0, read)
+                    }
+                }
+            } ?: throw IOException("could not open the file")
+
+            if (tmp.length() > MAX_ATTACHMENT_BYTES) {
+                tmp.delete()
+                showSnack("File too large (max 25 MB).")
+                return
+            }
+
             pendingAttachment = tmp
-            statusLabel.text = "Attachment ready: ${sanitize(name)} (will send with your reply)"
+            showSnack("Attachment ready — it will be sent with your reply.")
         } catch (e: Exception) {
-            statusLabel.text = "Could not read attachment: ${e.message}"
+            showSnack("Could not read attachment: ${e.message ?: ""}")
         }
     }
 
     private fun sanitize(n: String): String = n.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80)
 
-    // ------------------------------------------------------------ adapters
-    inner class MessageAdapter(private val data: List<ChatBridge.Message>) :
-        RecyclerView.Adapter<MessageAdapter.Holder>() {
+    // ------------------------------------------------------------ settings
 
-        inner class Holder(v: View) : RecyclerView.ViewHolder(v) {
-            val bubble: TextView = v.findViewById(R.id.bubble)
-            val sender: TextView = v.findViewById(R.id.sender_label)
-            val attach: TextView = v.findViewById(R.id.attach_label)
-            val image: android.widget.ImageView = v.findViewById(R.id.attach_image)
-            val row: android.widget.LinearLayout = v.findViewById(R.id.bubble_row)
-        }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            val v = LayoutInflater.from(parent.context).inflate(R.layout.item_message, parent, false)
-            return Holder(v)
-        }
-
-        override fun getItemCount() = data.size
-
-        override fun onBindViewHolder(h: Holder, position: Int) {
-            val m = data[position]
-            val mine = m.senderRole == "operator"
-            h.sender.text = when (m.senderRole) {
-                "user" -> "Member"
-                "operator" -> "You"
-                else -> "AI"
-            }
-            h.bubble.text = m.message.ifEmpty { "" }
-            h.bubble.setBackgroundResource(if (mine) R.drawable.bubble_out else R.drawable.bubble_in)
-            h.bubble.setTextColor(
-                if (mine) android.graphics.Color.WHITE
-                else androidx.core.content.ContextCompat.getColor(h.itemView.context, R.color.text),
-            )
-
-            // Member/AI messages hug the left; operator messages hug the right.
-            val gravity = if (mine) android.view.Gravity.END else android.view.Gravity.START
-            h.row.gravity = gravity
-            (h.sender.layoutParams as? android.widget.LinearLayout.LayoutParams)?.let { lp ->
-                lp.leftMargin = if (mine) 0 else 12
-                lp.rightMargin = if (mine) 12 else 0
-            }
-
-            // Reset image slot each bind.
-            h.image.setImageDrawable(null)
-            h.image.visibility = View.GONE
-            h.image.setOnClickListener(null)
-            h.image.layoutParams = h.image.layoutParams.also { lp ->
-                if (lp is android.widget.LinearLayout.LayoutParams) {
-                    lp.gravity = gravity
-                }
-            }
-
-            if (m.attachmentName != null) {
-                if (m.mediaExpired) {
-                    // Expiring media whose time / view limit has passed.
-                    h.attach.text = "🔒 Media expired"
-                    h.attach.visibility = View.VISIBLE
-                } else if (m.attachmentThumbUrl != null && m.attachmentUrl != null) {
-                    // Image attachment: show thumbnail (Coil caches it), tap to open full size.
-                    h.image.visibility = View.VISIBLE
-                    loadThumb(m, h.image)
-                    h.image.setOnClickListener { openFullImage(m) }
-                    h.attach.visibility = View.GONE
-                } else {
-                    // No URL yet (optimistic / queued send) or a non-image file.
-                    h.attach.text = "📎 " + m.attachmentName
-                    h.attach.visibility = View.VISIBLE
-                }
-            } else {
-                h.attach.visibility = View.GONE
-            }
-        }
-    }
-
-    /** Load an attachment thumbnail through Coil (memory + disk cached). */
-    private fun loadThumb(m: ChatBridge.Message, iv: android.widget.ImageView) {
+    /** Per-chat settings: AI mode + member replies + notifications. */
+    private fun showChatSettings() {
         val b = bridge ?: return
-        val url = b.resolveUrl(m.attachmentThumbUrl ?: return)
-        iv.load(url)
+        val currentMode = intent.getStringExtra("ai_mode") ?: "retrieval"
+        val modes = arrayOf("retrieval", "finetuned", "operator")
+        val labels = arrayOf("Retrieval (AI + history)", "Finetuned (trained AI)", "Operator (manual)")
+        val checked = modes.indexOf(currentMode).coerceAtLeast(0)
+
+        val chatKey = "chat_$conversationId"
+        val notifyOn = prefs.getBoolean("${chatKey}_notify", true)
+        val tone = prefs.getString("${chatKey}_tone", "").orEmpty()
+        val isFav = Favorites.isFavorite(this, conversationId)
+
+        data class Row(val label: String, val action: () -> Unit)
+
+        val rows = listOf(
+            Row(
+                getString(if (isFav) R.string.settings_fav_on else R.string.settings_fav_off)
+            ) {
+                Favorites.toggle(this, conversationId)
+                showChatSettings()
+            },
+            Row("Chat mode: ${labels[checked]}") { pickMode(modes, labels, checked, b) },
+            Row(
+                getString(
+                    if (memberReplyEnabled) R.string.settings_replies_on else R.string.settings_replies_off
+                )
+            ) {
+                val target = !memberReplyEnabled
+                lifecycleScope.launch {
+                    val ok = b.setMemberReply(conversationId, target)
+                    if (ok) {
+                        memberReplyEnabled = target
+                        intent.putExtra("member_reply_enabled", target)
+                        updateSubtitle()
+                    }
+                    showSnack(
+                        when {
+                            !ok -> "Could not update the reply toggle"
+                            target -> "Member replies enabled"
+                            else -> "Member replies disabled"
+                        }
+                    )
+                }
+            },
+            Row(
+                getString(
+                    if (notifyOn) R.string.settings_notify_on else R.string.settings_notify_off
+                )
+            ) {
+                val on = !notifyOn
+                prefs.edit().putBoolean("${chatKey}_notify", on).apply()
+                showChatSettings()
+            },
+            Row(
+                getString(
+                    if (tone.isEmpty()) R.string.settings_tone_default else R.string.settings_tone_set
+                )
+            ) { pickChatTone(chatKey) },
+        )
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Chat settings")
+            .setItems(rows.map { it.label }.toTypedArray()) { _, which -> rows[which].action() }
+            .setPositiveButton("Done", null)
+            .show()
     }
 
+    private fun pickMode(modes: Array<String>, labels: Array<String>, checked: Int, b: ChatBridge) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Chat mode")
+            .setSingleChoiceItems(labels, checked) { dialog, which ->
+                val mode = modes[which]
+                lifecycleScope.launch {
+                    val ok = b.setMode(conversationId, mode)
+                    showSnack(if (ok) "Mode set to ${labels[which]}" else "Mode update failed")
+                    if (ok) intent.putExtra("ai_mode", mode)
+                }
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun pickChatTone(chatKey: String) {
+        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_NOTIFICATION)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Chat notification tone")
+            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, true)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+            putExtra(
+                RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                Uri.parse(
+                    prefs.getString("${chatKey}_tone", null)
+                        ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION).toString()
+                )
+            )
+        }
+        chatToneResult.launch(intent)
+    }
+
+    private val chatToneResult = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+        if (uri != null) {
+            prefs.edit().putString("chat_${conversationId}_tone", uri.toString()).apply()
+            showSnack("Notification tone set.")
+        }
+    }
+
+    // ------------------------------------------------------------ media
+
+    /** Open a full-size attachment in the viewer. */
     private fun openFullImage(m: ChatBridge.Message) {
         val b = bridge ?: return
-        statusLabel.text = "Loading full image…"
         lifecycleScope.launch {
-            val f = File(cacheDir, "full_${m.id}_" + System.currentTimeMillis() + ".img")
+            showSnack("Loading…")
+            val f = File(cacheDir, "full_${m.id}_${System.currentTimeMillis()}.img")
             val dl = b.download(m.attachmentUrl ?: return@launch, f)
             if (dl == null) {
-                statusLabel.text = "Could not load image."
+                showSnack("Could not load the attachment.")
                 return@launch
             }
-            val intent = Intent(this@ChatActivity, MediaViewerActivity::class.java)
-            intent.putExtra("path", dl.absolutePath)
-            startActivity(intent)
-            statusLabel.text = "Live"
-        }
-    }
-
-    inner class EmojiAdapter(
-        private val list: List<String>,
-        private val onClick: (String) -> Unit,
-    ) : RecyclerView.Adapter<EmojiAdapter.Holder>() {
-
-        inner class Holder(v: View) : RecyclerView.ViewHolder(v) {
-            val btn: TextView = v.findViewById(R.id.emoji_item)
-        }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            val v = LayoutInflater.from(parent.context).inflate(R.layout.item_emoji, parent, false)
-            return Holder(v)
-        }
-
-        override fun getItemCount() = list.size
-
-        override fun onBindViewHolder(h: Holder, position: Int) {
-            h.btn.text = list[position]
-            h.btn.setOnClickListener { onClick(list[position]) }
+            startActivity(
+                Intent(this@ChatActivity, MediaViewerActivity::class.java)
+                    .putExtra("path", dl.absolutePath)
+            )
         }
     }
 

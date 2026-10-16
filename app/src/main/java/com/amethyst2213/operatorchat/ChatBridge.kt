@@ -15,6 +15,7 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.buffer
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -367,12 +368,23 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     }
 
     /**
+     * Result of a reply attempt.
+     *
+     * `reply()` used to return 0 for both a network failure and a server-side
+     * rejection, so the operator had no way to tell why a message did not go
+     * out. [Message] is the new id on success, or the reason it failed.
+     */
+    sealed class ReplyResult {
+        data class Sent(val id: Long) : ReplyResult()
+        data class Rejected(val reason: String) : ReplyResult()
+        data class Failed(val reason: String) : ReplyResult()
+    }
+
+    /**
      * POST /webhooks/chat/reply — send an operator reply, optionally with a
      * file attachment (image / video / text). Uses multipart when a file is
      * present so the server stores it as an attachment. Upload progress is
      * reported to onProgress (0..1) when an attachment is being sent.
-     *
-     * @return the new message id, or 0 on failure.
      */
     suspend fun reply(
         conversationId: Long,
@@ -382,7 +394,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         onProgress: ((Float) -> Unit)? = null,
         expiresInMinutes: Int = 0,
         maxViews: Int = 0,
-    ): Long = withContext(Dispatchers.IO) {
+    ): ReplyResult = withContext(Dispatchers.IO) {
             val reqBuilder = authed().url("$baseUrl/webhooks/chat/reply")
             if (!idempotencyKey.isNullOrBlank()) reqBuilder.header("Idempotency-Key", idempotencyKey)
 
@@ -407,10 +419,24 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 body = payload.toString().toRequestBody("application/json".toMediaType())
             }
 
-            client.newCall(reqBuilder.post(body).build()).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                val json = JSONObject(text)
-                if (json.optBoolean("ok", false)) json.optLong("id", 0) else 0
+            try {
+                client.newCall(reqBuilder.post(body).build()).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    val json = try { JSONObject(text) } catch (_: JSONException) { JSONObject() }
+                    if (json.optBoolean("ok", false)) {
+                        ReplyResult.Sent(json.optLong("id", 0))
+                    } else {
+                        // The server tells us why (banned word, closed thread,
+                        // over-size attachment). Surface it rather than a bare
+                        // "failed".
+                        val why = json.optString("error", "").ifBlank {
+                            "Server rejected the reply (HTTP ${resp.code})"
+                        }
+                        ReplyResult.Rejected(why)
+                    }
+                }
+            } catch (e: Exception) {
+                ReplyResult.Failed(e.message ?: "Could not reach the server")
             }
         }
 
@@ -547,10 +573,21 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     }
 
     private fun guessMediaType(f: File): String {
-        // First sniff the content's magic bytes — phone gallery files often
-        // have no recognisable extension.
+        // Sniff the first bytes only. The old code called readBytes() on the
+        // whole file and then took 16 of them, so attaching a 25 MB video
+        // allocated a 25 MB array on the heap (and the request could die with
+        // an OOM before it ever started).
         try {
-            val head = f.inputStream().use { it.readBytes().take(16).toByteArray() }
+            val head = f.inputStream().use { ins ->
+                val buf = ByteArray(16)
+                var read = 0
+                while (read < buf.size) {
+                    val n = ins.read(buf, read, buf.size - read)
+                    if (n <= 0) break
+                    read += n
+                }
+                buf.copyOf(read)
+            }
             val hex = head.joinToString("") { b -> String.format("%02X", b) }
             when {
                 hex.startsWith("FFD8FF") -> return "image/jpeg"
@@ -581,7 +618,15 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         private val SHARED_CLIENT: OkHttpClient by lazy {
             val builder = OkHttpClient.Builder()
                 .connectTimeout(20, TimeUnit.SECONDS)
+                // Without a write timeout a stalled upload never fails: the
+                // composer sat on "Sending…" forever with no way out.
+                .writeTimeout(60, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
+                // A whole call (connect + write + read) must always have a
+                // ceiling. SSE reads reset the read timeout per line, so a 5
+                // minute cap still leaves the 30s stream window untouched while
+                // guaranteeing a wedged connection eventually gives up.
+                .callTimeout(5, TimeUnit.MINUTES)
                 .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
 
             // Certificate pinning for the production host: the leaf SPKI plus

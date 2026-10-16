@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -246,9 +247,16 @@ class ChatPollService : Service() {
     private fun markReadPendingIntent(conversationId: Long): android.app.PendingIntent =
         actionPendingIntent(ChatActionReceiver.ACTION_MARK_READ, conversationId)
 
-    /** Tell MainActivity to refresh badges immediately. */
+    /**
+     * Tell MainActivity to refresh badges immediately.
+     *
+     * The intent is made explicit with setPackage(): an implicit broadcast for
+     * a custom action can be received by any app that registers for it, which
+     * would let another app trigger our badge refresh (and, before Android 14,
+     * silently change who owns the receiver).
+     */
     private fun broadcastRefresh() {
-        sendBroadcast(Intent(ACTION_CHAT_EVENT))
+        sendBroadcast(Intent(ACTION_CHAT_EVENT).setPackage(packageName))
     }
 
     override fun onDestroy() {
@@ -319,7 +327,27 @@ class ChatPollService : Service() {
             .addAction(replyAction(ev.conversationId))
             .addAction(0, "Mark read", markReadPendingIntent(ev.conversationId))
             .addAction(0, "Mute", mutePendingIntent(ev.conversationId))
-        NotificationManagerCompat.from(this).notify((1000 + ev.conversationId).toInt(), builder.build())
+        postNotification((1000 + ev.conversationId).toInt(), builder.build())
+    }
+
+    /**
+     * Post a notification, or skip it when the operator has denied
+     * POST_NOTIFICATIONS (Android 13+). NotifyCompat.notify() throws a
+     * SecurityException on a denied permission, which used to take the poll
+     * service down mid-run.
+     */
+    private fun postNotification(id: Int, notification: android.app.Notification) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return // operator denied notifications: silently skip
+        }
+        try {
+            NotificationManagerCompat.from(this).notify(id, notification)
+        } catch (_: SecurityException) {
+            // A revoked permission must never take the poll service down.
+        }
     }
 
     private fun notifyNewMessage(c: ChatBridge.Conversation, tone: String?) {
@@ -343,7 +371,7 @@ class ChatPollService : Service() {
             .addAction(replyAction(c.id))
             .addAction(0, "Mark read", markReadPendingIntent(c.id))
             .addAction(0, "Mute", mutePendingIntent(c.id))
-        NotificationManagerCompat.from(this).notify((1000 + c.id).toInt(), builder.build())
+        postNotification((1000 + c.id).toInt(), builder.build())
     }
 
     private fun openChatIntent(conversationId: Long): android.app.PendingIntent {

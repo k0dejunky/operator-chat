@@ -5,20 +5,15 @@
     android:orientation="vertical"
     android:background="@color/surface">
 
-    <FrameLayout
+    <!-- Toolbar sits on the plain surface colour, like every other screen. -->
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/toolbar"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@drawable/ig_gradient">
-
-        <androidx.appcompat.widget.Toolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="@android:color/transparent"
-            android:titleTextColor="@color/white"
-            app:titleTextAppearance="@style/Theme.OperatorChat.ToolbarTitle"
-            xmlns:app="http://schemas.android.com/apk/res-auto" />
-    </FrameLayout>
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/surface_card"
+        android:titleTextColor="@color/text"
+        app:titleTextAppearance="@style/Theme.OperatorChat.ToolbarTitle"
+        xmlns:app="http://schemas.android.com/apk/res-auto" />
 
     <TextView
         android:id="@+id/notify_status"

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Solid circular avatar fill (behind the member's initial). -->
+<!-- Circular avatar fill. The tint is applied per member in code. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="oval">
-    <solid android:color="@color/purple" />
+    <solid android:color="@color/brand" />
 </shape>

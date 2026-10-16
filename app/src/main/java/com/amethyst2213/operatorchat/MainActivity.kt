@@ -13,9 +13,11 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import android.content.res.ColorStateList
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ProgressBar
@@ -29,6 +31,7 @@ import androidx.appcompat.widget.Toolbar
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
+import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -36,6 +39,7 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import java.util.TimeZone
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -471,45 +475,89 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ---------------------------------------------------------------- adapter
-    inner class InboxAdapter(
+    private class Holder(v: View) : RecyclerView.ViewHolder(v) {
+        val title: TextView = v.findViewById(R.id.row_title)
+        val preview: TextView = v.findViewById(R.id.row_preview)
+        val badge: TextView = v.findViewById(R.id.row_badge)
+        val avatar: TextView = v.findViewById(R.id.row_avatar)
+        val avatarBg: ImageView = v.findViewById(R.id.row_avatar_bg)
+        val time: TextView = v.findViewById(R.id.row_time)
+    }
+
+    private inner class InboxAdapter(
         private val onClick: (ChatBridge.Conversation) -> Unit,
-    ) : ListAdapter<ChatBridge.Conversation, InboxAdapter.Holder>(INBOX_DIFF) {
+    ) : ListAdapter<ChatBridge.Conversation, Holder>(INBOX_DIFF) {
 
-        inner class Holder(v: View) : RecyclerView.ViewHolder(v) {
-            val title: TextView = v.findViewById(R.id.row_title)
-            val badge: TextView = v.findViewById(R.id.row_badge)
-            val star: TextView = v.findViewById(R.id.row_star)
-            val preview: TextView = v.findViewById(R.id.row_preview)
-            val avatar: TextView = v.findViewById(R.id.row_avatar)
-        }
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            val v = layoutInflater.inflate(R.layout.row_user, parent, false)
-            return Holder(v)
-        }
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
+            Holder(layoutInflater.inflate(R.layout.row_user, parent, false))
 
         override fun onBindViewHolder(h: Holder, position: Int) {
             val c = getItem(position)
-            h.title.text = c.username.ifEmpty { c.userEmail }
             val name = c.username.ifEmpty { c.userEmail }
+
+            h.title.text = name
             h.avatar.text = name.trim().firstOrNull()?.uppercase() ?: "?"
-            h.star.text = if (c.favorite) "★" else "☆"
-            h.star.setOnClickListener {
-                Favorites.toggle(this@MainActivity, c.id)
-                vm.refresh(showLoading = false)
+            // A stable colour per member, so the tiles read as distinct without
+            // any extra data coming from the server.
+            h.avatarBg.imageTintList = android.content.res.ColorStateList.valueOf(avatarColor(c.id))
+            h.time.text = briefTime(c.lastMessageAt)
+            h.time.visibility = if (c.lastMessageAt.isBlank()) View.GONE else View.VISIBLE
+
+            val unread = c.unreadReplyable
+            h.badge.isVisible = unread > 0
+            if (unread > 0) h.badge.text = if (unread > 99) "99+" else unread.toString()
+            h.badge.contentDescription = unread.toString() + " unread"
+
+            val last = when {
+                c.lastMessage.isNotBlank() -> c.lastMessage
+                else -> "(no messages)"
             }
-            if (vm.allUsersMode) {
-                h.badge.visibility = if (c.unreadReplyable > 0) View.VISIBLE else View.GONE
-                if (c.unreadReplyable > 0) h.badge.text = c.unreadReplyable.toString()
-                h.preview.visibility = View.VISIBLE
-                h.preview.text = (if (c.lastSender == "user") "Member: " else "") +
-                    c.lastMessage.take(60).ifEmpty { "(no messages)" }
-            } else {
-                h.badge.visibility = View.VISIBLE
-                h.badge.text = c.unreadReplyable.toString()
-                h.preview.visibility = View.GONE
-            }
+            h.preview.text = (if (c.lastSender == "user") "Member: " else "You: ") + last
+            h.preview.isVisible = vm.allUsersMode
+            h.title.setTextColor(
+                if (unread > 0) {
+                    ContextCompat.getColor(this@MainActivity, R.color.text)
+                } else {
+                    ContextCompat.getColor(this@MainActivity, R.color.text_secondary)
+                }
+            )
             h.itemView.setOnClickListener { onClick(c) }
+        }
+
+        /** A stable accent for a conversation id, from the app's own palette. */
+        private fun avatarColor(id: Long): Int {
+            val palette = intArrayOf(
+                R.color.avatar_1, R.color.avatar_2, R.color.avatar_3,
+                R.color.avatar_4, R.color.avatar_5,
+            )
+            return ContextCompat.getColor(
+                this@MainActivity,
+                palette[((id % palette.size.toLong()).toInt() + palette.size) % palette.size],
+            )
+        }
+
+        /** "14:32" for today, "Tue" inside the last week, else "12 Mar". */
+        private fun briefTime(raw: String): String {
+            val tzId = getSharedPreferences("operator_chat", MODE_PRIVATE)
+                .getString("site_timezone", ChatRows.DEFAULT_ZONE) ?: ChatRows.DEFAULT_ZONE
+            val tz = TimeZone.getTimeZone(tzId)
+            val epoch = ChatRows.epochMillis(raw, tzId)
+            if (epoch <= 0) return ""
+
+            val then = java.util.Calendar.getInstance(tz).apply { timeInMillis = epoch }
+            val now = java.util.Calendar.getInstance(tz)
+            val sameDay = then.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR) &&
+                then.get(java.util.Calendar.DAY_OF_YEAR) == now.get(java.util.Calendar.DAY_OF_YEAR)
+            val withinWeek = now.timeInMillis - epoch < 6L * 24 * 60 * 60 * 1000
+
+            val pattern = when {
+                sameDay -> "HH:mm"
+                withinWeek -> "EEE"
+                else -> "d MMM"
+            }
+            return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
+                .apply { timeZone = tz }
+                .format(java.util.Date(epoch))
         }
     }
 

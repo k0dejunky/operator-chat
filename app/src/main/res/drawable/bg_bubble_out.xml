@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Outgoing: one flat accent colour. The old Instagram gradient (purple ->
+     red -> amber) was loud and made white text hard to read on the amber end. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/brand" />
+    <corners android:radius="18dp" />
+</shape>

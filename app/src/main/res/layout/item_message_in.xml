@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Incoming (member / AI) message. Left-aligned bubble, 56dp start padding
+     leaves room for nothing on this side (the header carries the sender name)
+     but keeps the two bubbles optically balanced. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingStart="12dp"
+    android:paddingEnd="56dp"
+    android:paddingTop="2dp"
+    android:paddingBottom="2dp"
+    android:clipToPadding="false">
+
+    <TextView
+        android:id="@+id/row_header"
+        style="@style/Widget.OperatorChat.Meta"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingBottom="2dp"
+        android:textStyle="bold"
+        android:textColor="@color/brand_light"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/row_bubble"
+        style="@style/Widget.OperatorChat.Bubble.In"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="start"
+        android:maxWidth="280dp"
+        android:textColor="@color/text" />
+
+    <ImageView
+        android:id="@+id/row_image"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:adjustViewBounds="true"
+        android:maxWidth="240dp"
+        android:maxHeight="320dp"
+        android:scaleType="centerCrop"
+        android:background="@drawable/bg_bubble_in"
+        android:contentDescription="Attachment"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/row_file"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:background="@drawable/bg_bubble_in"
+        android:drawableStart="@drawable/ic_folder"
+        android:drawableTint="@color/text_secondary"
+        android:drawablePadding="8dp"
+        android:gravity="center_vertical"
+        android:maxWidth="240dp"
+        android:maxLines="2"
+        android:ellipsize="middle"
+        android:textColor="@color/text"
+        android:textSize="13sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/row_meta"
+        style="@style/Widget.OperatorChat.Meta"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:paddingTop="3dp"
+        android:paddingBottom="2dp" />
+</LinearLayout>

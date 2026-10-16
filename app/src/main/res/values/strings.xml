@@ -1,3 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Operator Chat</string>
+
+    <!-- Thread -->
+    <string name="delivery_sending">Sending…</string>
+    <string name="delivery_queued">Queued</string>
+    <string name="delivery_failed">Failed — tap to retry</string>
+    <string name="attachment_expired">Media expired</string>
+    <string name="attachment_file">Attachment</string>
+
+    <!-- Thread states -->
+    <string name="status_live">Live</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_reconnecting">Reconnecting…</string>
+    <string name="status_offline">Waiting for connection</string>
+    <string name="chat_empty_title">No messages yet</string>
+    <string name="chat_empty_body">Send the first reply to start this conversation.</string>
+
+    <!-- Composer / attach -->
+    <string name="composer_hint">Message…</string>
+    <string name="composer_send">Send</string>
+    <string name="composer_attach">Attach</string>
+    <string name="composer_emoji">Emoji</string>
+    <string name="attach_photo">Take photo</string>
+    <string name="attach_video">Record video</string>
+    <string name="attach_file">Choose file</string>
+    <string name="attach_title">Attach</string>
+
+    <!-- Header -->
+    <string name="chat_member_subtitle">Member</string>
+    <string name="chat_replies_on">Member replies enabled</string>
+    <string name="chat_replies_off">Member replies off</string>
+    <string name="scroll_to_bottom">Scroll to latest</string>
+
+    <!-- Chat settings rows -->
+    <string name="settings_fav_on">★ Favourite: ON</string>
+    <string name="settings_fav_off">☆ Favourite: OFF</string>
+    <string name="settings_replies_on">Member replies: ON</string>
+    <string name="settings_replies_off">Member replies: OFF</string>
+    <string name="settings_notify_on">Notifications: ON</string>
+    <string name="settings_notify_off">Notifications: OFF</string>
+    <string name="settings_tone_default">Notification tone: default</string>
+    <string name="settings_tone_set">Notification tone: set</string>
 </resources>

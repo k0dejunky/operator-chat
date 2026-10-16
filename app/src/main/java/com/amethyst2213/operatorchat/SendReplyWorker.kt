@@ -27,16 +27,24 @@ class SendReplyWorker(appContext: Context, params: WorkerParameters) :
                 val file = p.attachmentPath?.let { path ->
                     File(path).takeIf { it.isFile }
                 }
-                val id = bridge.reply(
+                when (val result = bridge.reply(
                     p.conversationId, p.message, file, p.key,
                     expiresInMinutes = p.expiresInMinutes, maxViews = p.maxViews,
-                )
-                if (id > 0) {
-                    SendQueue.remove(app, p.key)
-                } else {
-                    failed = true
+                )) {
+                    is ChatBridge.ReplyResult.Sent -> SendQueue.remove(app, p.key)
+                    // A rejection will not fix itself on retry: drop it rather
+                    // than burning backoff cycles forever. Network failures
+                    // above stay queued and are retried with backoff.
+                    is ChatBridge.ReplyResult.Rejected -> {
+                        android.util.Log.w(
+                            "SendReplyWorker",
+                            "queued reply ${p.key} rejected: ${result.reason}; dropping",
+                        )
+                        SendQueue.remove(app, p.key)
+                    }
+                    is ChatBridge.ReplyResult.Failed -> failed = true
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 failed = true
             }
         }

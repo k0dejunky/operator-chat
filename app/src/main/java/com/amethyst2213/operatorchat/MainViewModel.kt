@@ -88,7 +88,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 val page = b.inbox(query, if (loadMore) nextCursor else null)
-                val sorted = page.items.sortedByDescending { parseEpoch(it.lastMessageAt) }
+                val sorted = page.items.sortedByDescending { sortKey(it.lastMessageAt) }
                 val displayed = if (allUsersMode) {
                     val fav = sorted.filter { Favorites.isFavorite(getApplication(), it.id) }
                     val rest = sorted.filter { !Favorites.isFavorite(getApplication(), it.id) }
@@ -133,14 +133,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Parse the server's "yyyy-MM-dd HH:mm:ss" timestamp to epoch millis. */
-    private fun parseEpoch(value: String): Long {
-        return try {
-            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
-                .parse(value)
-                ?.time ?: 0L
-        } catch (_: Exception) {
-            0L
-        }
-    }
+    /** Zone the server stamps its timestamps in. */
+    private fun zoneId(): String =
+        getApplication<Application>()
+            .getSharedPreferences("operator_chat", android.content.Context.MODE_PRIVATE)
+            .getString("site_timezone", ChatRows.DEFAULT_ZONE)
+            ?: ChatRows.DEFAULT_ZONE
+
+    /**
+     * Sort by the server's timestamp.
+     *
+     * This used to call SimpleDateFormat().parse() with the DEVICE's default
+     * timezone. The server stamps in the site timezone, so on a phone anywhere
+     * else the inbox was ordered wrong (and every "2 min ago" label was off by
+     * the offset). The zone now comes from the same parser the thread uses.
+     */
+    private fun sortKey(value: String): Long =
+        ChatRows.epochMillis(value, zoneId())
 }
