@@ -35,6 +35,8 @@ object SendQueue {
         val attachmentPath: String? = null,
         val expiresInMinutes: Int = 0,
         val maxViews: Int = 0,
+        /** When the reply entered the queue (epoch millis); 0 on old entries. */
+        val at: Long = 0L,
     )
 
     fun pending(context: Context): List<Pending> {
@@ -55,6 +57,7 @@ object SendQueue {
                         o.optString("attachment_path", "").ifEmpty { null },
                         o.optInt("expires_in_minutes", 0),
                         o.optInt("max_views", 0),
+                        o.optLong("at", 0L),
                     )
                 }
             }
@@ -74,21 +77,72 @@ object SendQueue {
     ) {
         val list = pending(context).toMutableList()
         if (list.none { it.key == key }) {
-            list.add(Pending(conversationId, message, key, attachmentPath, expiresInMinutes, maxViews))
+            list.add(
+                Pending(
+                    conversationId, message, key, attachmentPath, expiresInMinutes, maxViews,
+                    System.currentTimeMillis(),
+                )
+            )
             save(context, list)
         }
     }
 
     fun remove(context: Context, key: String) {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val stale = pending(context).filter { it.key == key }
         save(context, pending(context).filter { it.key != key })
-        // Clean up stashed attachment files that will never be sent.
+        // Pre-2.48 builds kept a per-conversation key in these prefs; nothing
+        // reads it any more, and a leftover would be a stale key an upgrade
+        // could reuse. Drop it when the queue entry it belonged to leaves.
         stale.forEach { p ->
+            if (sp.getString("pending_reply_key_${p.conversationId}", null) == key) {
+                sp.edit().remove("pending_reply_key_${p.conversationId}").apply()
+            }
+            // Clean up stashed attachment files that will never be sent.
             p.attachmentPath?.let { path ->
                 val f = File(path)
                 if (f.parentFile?.name == ATTACH_DIR) f.delete()
             }
         }
+    }
+
+    /** Queued replies for ONE conversation, for the thread's outbox strip. */
+    fun pendingFor(context: Context, conversationId: Long): List<Pending> =
+        pending(context).filter { it.conversationId == conversationId }
+
+    /** A reply the worker refused to keep trying (e.g. server rejection). */
+    data class Dropped(val message: String, val reason: String, val at: Long)
+
+    /**
+     * Records why a queued reply was dropped, so the operator sees the failure
+     * instead of it dying as a Log.w line. One record, latest wins.
+     */
+    fun recordDrop(context: Context, message: String, reason: String) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString("send_queue_drop_message", message)
+            .putString("send_queue_drop_reason", reason)
+            .putLong("send_queue_drop_at", System.currentTimeMillis())
+            .apply()
+    }
+
+    fun lastDrop(context: Context): Dropped? {
+        val sp = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val reason = sp.getString("send_queue_drop_reason", null) ?: return null
+        return Dropped(
+            sp.getString("send_queue_drop_message", "").orEmpty(),
+            reason,
+            sp.getLong("send_queue_drop_at", 0L),
+        )
+    }
+
+    fun clearDrop(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .remove("send_queue_drop_message")
+            .remove("send_queue_drop_reason")
+            .remove("send_queue_drop_at")
+            .apply()
     }
 
     fun hasPending(context: Context): Boolean = pending(context).isNotEmpty()
@@ -154,6 +208,7 @@ object SendQueue {
             if (it.attachmentPath != null) o.put("attachment_path", it.attachmentPath)
             if (it.expiresInMinutes > 0) o.put("expires_in_minutes", it.expiresInMinutes)
             if (it.maxViews > 0) o.put("max_views", it.maxViews)
+            if (it.at > 0) o.put("at", it.at)
             arr.put(o)
         }
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

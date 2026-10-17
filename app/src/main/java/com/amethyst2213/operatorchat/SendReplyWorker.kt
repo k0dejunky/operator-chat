@@ -33,13 +33,14 @@ class SendReplyWorker(appContext: Context, params: WorkerParameters) :
                 )) {
                     is ChatBridge.ReplyResult.Sent -> SendQueue.remove(app, p.key)
                     // A rejection will not fix itself on retry: drop it rather
-                    // than burning backoff cycles forever. Network failures
-                    // above stay queued and are retried with backoff.
+                    // than burning backoff cycles forever, and record WHY so
+                    // the operator sees it instead of it vanishing silently.
                     is ChatBridge.ReplyResult.Rejected -> {
                         android.util.Log.w(
                             "SendReplyWorker",
                             "queued reply ${p.key} rejected: ${result.reason}; dropping",
                         )
+                        SendQueue.recordDrop(app, p.message, result.reason)
                         SendQueue.remove(app, p.key)
                     }
                     is ChatBridge.ReplyResult.Failed -> failed = true

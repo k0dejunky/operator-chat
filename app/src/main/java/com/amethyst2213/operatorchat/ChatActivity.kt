@@ -41,6 +41,7 @@ import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 /**
@@ -89,6 +90,14 @@ class ChatActivity : AppCompatActivity() {
 
     /** Ids of optimistic rows still waiting for the server to confirm them. */
     private val optimisticIds = mutableSetOf<Long>()
+
+    /**
+     * The idempotency key each in-flight optimistic row was sent with. Retrying
+     * the SAME attempt must reuse its key (so the server can dedupe a reply the
+     * network dropped after storing); a brand new message must always carry a
+     * fresh one (see [resolveSent] for why reuse loses messages).
+     */
+    private val attemptKeys = mutableMapOf<Long, String>()
 
     private lateinit var adapter: MessageAdapter
     private var streamJob: Job? = null
@@ -199,7 +208,10 @@ class ChatActivity : AppCompatActivity() {
         binding.sendButton.setOnClickListener { sendReply() }
         binding.attachButton.setOnClickListener { showAttachChooser() }
         binding.scrollBottomFab.setOnClickListener { scrollToBottom() }
+        binding.outboxAction.setOnClickListener { onOutboxAction() }
+        binding.outboxBar.setOnClickListener { onOutboxAction() }
 
+        syncOutbox()
         render()
     }
 
@@ -300,6 +312,160 @@ class ChatActivity : AppCompatActivity() {
         imm?.hideSoftInputFromWindow(binding.replyInput.windowToken, 0)
     }
 
+    // -------------------------------------------------------------- outbox
+
+    /** Synthetic thread rows for queued replies, keyed by their outbox key. */
+    private val outboxRows = mutableMapOf<String, Long>()
+
+    /** Synthetic ids sit above any real server id so they sort last. */
+    private var nextOutboxId = Long.MAX_VALUE - 1
+
+    /**
+     * Mirror this conversation's outbox into the UI: one QUEUED row per queued
+     * reply, plus the strip above the thread ("N replies queued" — or, when the
+     * queue is empty, the last rejected reply so its loss is never silent).
+     *
+     * A reply still represented by an optimistic row is not duplicated. A reply
+     * whose entry left the queue (delivered, rejected, discarded) loses its
+     * synthetic row; the stream calls this after every batch, so a delivered
+     * reply swaps cleanly from its synthetic row to the server's real copy.
+     */
+    private fun syncOutbox() {
+        val pending = SendQueue.pendingFor(this, conversationId)
+
+        // Drop synthetic rows whose queue entry is gone.
+        val liveKeys = pending.map { it.key }.toSet()
+        val stale = outboxRows.filterKeys { it !in liveKeys }.values.toSet()
+        if (stale.isNotEmpty()) {
+            outboxRows.entries.removeAll { it.value in stale }
+            messages.removeAll { it.id in stale }
+            stale.forEach { deliveries.remove(it) }
+        }
+
+        // Add a row for each entry that has no on-screen row yet.
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone(siteZone)
+        }
+        for (p in pending.sortedBy { it.at }) {
+            if (outboxRows.containsKey(p.key)) continue
+            val shownByOptimistic = attemptKeys.any { (pid, key) ->
+                key == p.key && messages.any { it.id == pid }
+            }
+            if (shownByOptimistic) continue
+
+            val id = nextOutboxId--
+            outboxRows[p.key] = id
+            deliveries[id] = Delivery.QUEUED
+            messages += ChatBridge.Message(
+                id = id,
+                conversationId = conversationId,
+                senderRole = "operator",
+                message = p.message.ifBlank { getString(R.string.outbox_attachment) },
+                createdAt = fmt.format(Date(if (p.at > 0) p.at else System.currentTimeMillis())),
+                attachmentName = null,
+                attachmentType = null,
+                attachmentUrl = null,
+                attachmentThumbUrl = null,
+                expiresAt = null,
+                maxViews = 0,
+                viewCount = 0,
+                mediaExpired = false,
+            )
+        }
+
+        val drop = SendQueue.lastDrop(this)
+        binding.outboxBar.isVisible = pending.isNotEmpty() || drop != null
+        binding.outboxText.text = when {
+            pending.isNotEmpty() -> if (pending.size == 1) {
+                getString(R.string.outbox_queued_one)
+            } else {
+                getString(R.string.outbox_queued_many, pending.size)
+            }
+            drop != null -> getString(R.string.outbox_dropped, preview(drop.message))
+            else -> ""
+        }
+        binding.outboxAction.text = getString(
+            if (pending.isNotEmpty()) R.string.outbox_review else R.string.outbox_dismiss_notice
+        )
+        render()
+    }
+
+    /** What the strip's button does: review the queue, or dismiss the notice. */
+    private fun onOutboxAction() {
+        if (SendQueue.pendingFor(this, conversationId).isEmpty()) {
+            SendQueue.clearDrop(this)
+            syncOutbox()
+        } else {
+            showOutboxDialog()
+        }
+    }
+
+    private fun preview(text: String): String {
+        val body = text.ifBlank { getString(R.string.outbox_attachment) }
+        return if (body.length > 60) body.take(60) + "…" else body
+    }
+
+    private fun showOutboxDialog() {
+        val sorted = SendQueue.pendingFor(this, conversationId).sortedBy { it.at }
+        val drop = SendQueue.lastDrop(this)
+        if (sorted.isEmpty() && drop == null) return
+
+        val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone(siteZone)
+        }
+        val labels = sorted.map { p ->
+            val stamp = if (p.at > 0) "  (${timeFmt.format(Date(p.at))})" else ""
+            preview(p.message) + stamp
+        }.toTypedArray()
+
+        val builder = MaterialAlertDialogBuilder(this).setTitle(R.string.outbox_title)
+        if (labels.isNotEmpty()) {
+            builder.setItems(labels) { _, which -> pendingItemActions(sorted[which]) }
+        }
+        if (drop != null) {
+            builder.setMessage(getString(R.string.outbox_dropped, drop.reason))
+        }
+        builder.setNeutralButton(R.string.outbox_close, null)
+        builder.show()
+    }
+
+    /** Per-item dialog: retry it now, or discard it for good. */
+    private fun pendingItemActions(p: SendQueue.Pending) {
+        val timeFmt = SimpleDateFormat("HH:mm", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone(siteZone)
+        }
+        val whenText = if (p.at > 0) timeFmt.format(Date(p.at)) else "—"
+        MaterialAlertDialogBuilder(this)
+            .setTitle(preview(p.message))
+            .setMessage("Queued at $whenText")
+            .setPositiveButton(R.string.outbox_retry) { _, _ ->
+                SendQueue.schedule(this)
+                showSnack(getString(R.string.outbox_retrying))
+                syncOutbox()
+            }
+            .setNegativeButton(R.string.outbox_discard) { _, _ -> discardPending(p) }
+            .setNeutralButton(R.string.outbox_close, null)
+            .show()
+    }
+
+    private fun discardPending(p: SendQueue.Pending) {
+        SendQueue.remove(this, p.key)
+        // Drop the optimistic row of this session, if there is one.
+        attemptKeys.entries.firstOrNull { it.value == p.key }?.let { (pid, _) ->
+            attemptKeys.remove(pid)
+            optimisticIds -= pid
+            deliveries.remove(pid)
+            messages.removeAll { it.id == pid }
+        }
+        // …and the synthetic row, if the queue entry was mirrored this session.
+        outboxRows.remove(p.key)?.let { id ->
+            messages.removeAll { it.id == id }
+            deliveries.remove(id)
+        }
+        showSnack(getString(R.string.outbox_discarded))
+        syncOutbox()
+    }
+
     // ------------------------------------------------------------ streaming
 
     private fun startStream() {
@@ -315,12 +481,16 @@ class ChatActivity : AppCompatActivity() {
             try {
                 val hist = b.thread(conversationId)
                 messages.clear()
+                optimisticIds.clear()
+                deliveries.clear()
+                attemptKeys.clear()
+                outboxRows.clear()
                 messages.addAll(hist.sortedBy { it.id })
                 latestId = hist.maxOfOrNull { it.id } ?: 0L
                 oldestId = hist.minOfOrNull { it.id } ?: 0L
                 hasMore = hist.size >= 50
                 wasAtBottom = true
-                render()
+                syncOutbox()
                 scrollToBottom()
                 // Deliver any queued offline replies now that we are connected.
                 SendQueue.schedule(this@ChatActivity)
@@ -380,7 +550,7 @@ class ChatActivity : AppCompatActivity() {
 
         latestId = maxOf(latestId, fresh.maxOf { it.id })
         messages.addAll(fresh.sortedBy { it.id })
-        render()
+        syncOutbox()
         lifecycleScope.launch { bridge?.setRead(conversationId, latestId) }
     }
 
@@ -462,10 +632,13 @@ class ChatActivity : AppCompatActivity() {
     private fun doSend(text: String, pending: File?, expiresInMinutes: Int, maxViews: Int) {
         val b = bridge ?: run { showSnack("Not connected."); return }
 
-        val idempotencyKey = prefs.getString("pending_reply_key_$conversationId", null)
-            ?: UUID.randomUUID().toString().also {
-                prefs.edit().putString("pending_reply_key_$conversationId", it).apply()
-            }
+        // A FRESH key for every new message. A key persisted from an earlier
+        // attempt must never be reused here: the server answers idempotently
+        // with the OLD message's id, which would make the confirmation swap a
+        // duplicate of the old message in place of this text (silent loss).
+        // Only a retry of the same attempt reuses its key, and those live in
+        // [attemptKeys] / the outbox entry.
+        val idempotencyKey = SendReconcile.newKey()
 
         binding.replyInput.setText("")
         prefs.edit().remove("draft_$conversationId").apply()
@@ -476,6 +649,7 @@ class ChatActivity : AppCompatActivity() {
         // is dropped the moment the real message arrives on the stream.
         val placeholderId = --pendingPlaceholderId
         optimisticIds += placeholderId
+        attemptKeys[placeholderId] = idempotencyKey
         deliveries[placeholderId] = Delivery.SENDING
         messages += ChatBridge.Message(
             id = placeholderId,
@@ -510,29 +684,17 @@ class ChatActivity : AppCompatActivity() {
                 )
             ) {
                 is ChatBridge.ReplyResult.Sent -> {
-                    optimisticIds -= placeholderId
-                    deliveries.remove(placeholderId)
-                    latestId = maxOf(latestId, result.id)
-                    // Swap the placeholder for the server's copy so it carries
-                    // the real timestamp and attachment URLs. One targeted
-                    // history call (not a full thread reload) fetches just it.
-                    if (result.id > 0) {
-                        val (one, _) = b.history(conversationId, result.id + 1, 1)
-                        val real = one.firstOrNull { it.id == result.id }
-                        val idx = messages.indexOfFirst { it.id == placeholderId }
-                        if (real != null && idx >= 0) {
-                            messages[idx] = real
-                        } else if (idx >= 0) {
-                            messages.removeAt(idx)
-                        }
-                        SendQueue.remove(this@ChatActivity, idempotencyKey)
-                        prefs.edit().remove("pending_reply_key_$conversationId").apply()
-                    } else {
-                        messages.removeAll { it.id == placeholderId }
-                    }
+                    val outcome = resolveSent(
+                        result.id, placeholderId, text, pending, expiresInMinutes, maxViews,
+                    )
+                    SendQueue.remove(this@ChatActivity, idempotencyKey)
                     wasAtBottom = true
                     render()
-                    showSnack("Sent")
+                    if (outcome == SendReconcile.Outcome.QUEUED) {
+                        showSnackLong("Not confirmed by the server — queued and will be delivered automatically.")
+                    } else {
+                        showSnack("Sent")
+                    }
                 }
 
                 is ChatBridge.ReplyResult.Rejected -> {
@@ -540,8 +702,8 @@ class ChatActivity : AppCompatActivity() {
                     // and say why, instead of queueing it forever.
                     optimisticIds -= placeholderId
                     deliveries.remove(placeholderId)
+                    attemptKeys.remove(placeholderId)
                     messages.removeAll { it.id == placeholderId }
-                    prefs.edit().remove("pending_reply_key_$conversationId").apply()
                     render()
                     showSnackLong(result.reason)
                 }
@@ -563,6 +725,88 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Reconciles a `Sent` result with the optimistic row [placeholderId].
+     *
+     * The server answers IDEMPOTENTLY when a key was used before, and that
+     * answer carries the OLD message's id. Swapping it in would silently
+     * replace this message with a duplicate of an earlier one, so
+     * [SendReconcile.classify] only accepts the server's copy when its text
+     * really is this message; on a mismatch the text goes to the outbox under a
+     * FRESH key so it is delivered for real. When the copy cannot be confirmed
+     * the row is dropped WITHOUT advancing latestId, so the SSE stream
+     * re-fetches this id and renders the server's real copy.
+     */
+    private suspend fun resolveSent(
+        sentId: Long,
+        placeholderId: Long,
+        text: String,
+        attachment: File?,
+        expiresInMinutes: Int,
+        maxViews: Int,
+    ): SendReconcile.Outcome {
+        val idx = messages.indexOfFirst { it.id == placeholderId }
+        var fetched: ChatBridge.Message? = null
+        var fetchFailed = false
+        try {
+            if (sentId > 0) {
+                fetched = bridge?.history(conversationId, sentId + 1, 1)?.first
+                    ?.firstOrNull { it.id == sentId }
+            }
+        } catch (_: Exception) {
+            fetchFailed = true
+        }
+
+        return when (SendReconcile.classify(sentId, fetched, fetchFailed, text)) {
+            SendReconcile.Outcome.CONFIRMED -> {
+                optimisticIds -= placeholderId
+                deliveries.remove(placeholderId)
+                attemptKeys.remove(placeholderId)
+                latestId = maxOf(latestId, sentId)
+                if (fetched != null) {
+                    // A thread reload can have cleared the optimistic row; in
+                    // that case insert the server copy instead of swapping.
+                    if (idx >= 0) messages[idx] = fetched else messages += fetched
+                }
+                SendReconcile.Outcome.CONFIRMED
+            }
+            SendReconcile.Outcome.QUEUED -> {
+                // The key answered for an OLDER message, so this text was never
+                // stored. Deliver it for real under a fresh key.
+                queueUnconfirmed(placeholderId, text, attachment, expiresInMinutes, maxViews)
+                SendReconcile.Outcome.QUEUED
+            }
+            SendReconcile.Outcome.UNCONFIRMED -> {
+                optimisticIds -= placeholderId
+                deliveries.remove(placeholderId)
+                attemptKeys.remove(placeholderId)
+                if (idx >= 0) messages.removeAt(idx)
+                SendReconcile.Outcome.UNCONFIRMED
+            }
+        }
+    }
+
+    /**
+     * Puts [text] in the outbox under a FRESH idempotency key and keeps its row
+     * visible. The row stays in [optimisticIds], so when the worker delivers it
+     * and the stream carries the real message, [collectIncoming] drops the
+     * placeholder by its matching text.
+     */
+    private fun queueUnconfirmed(
+        placeholderId: Long,
+        text: String,
+        attachment: File?,
+        expiresInMinutes: Int,
+        maxViews: Int,
+    ) {
+        val key = SendReconcile.newKey()
+        val stashed = attachment?.let { SendQueue.stashAttachment(this, it, key) }
+        SendQueue.add(this, conversationId, text, key, stashed, expiresInMinutes, maxViews)
+        attemptKeys[placeholderId] = key
+        deliveries[placeholderId] = Delivery.QUEUED
+        SendQueue.schedule(this)
+    }
+
     /** Retry an optimistic message from its meta line. */
     private fun retryMessage(m: ChatBridge.Message) {
         if (m.id > 0) return // a real, delivered message has nothing to retry
@@ -574,19 +818,24 @@ class ChatActivity : AppCompatActivity() {
         }
         deliveries[m.id] = Delivery.SENDING
         render()
-        val key = prefs.getString("pending_reply_key_$conversationId", null)
-            ?: UUID.randomUUID().toString()
+        // Retry the SAME attempt: reuse its key so a reply the network dropped
+        // after the server stored it is deduped, not duplicated.
+        val key = attemptKeys[m.id] ?: SendReconcile.newKey().also {
+            attemptKeys[m.id] = it
+        }
         lifecycleScope.launch {
             when (
                 val result = bridge?.reply(conversationId, m.message, null, key)
                     ?: ChatBridge.ReplyResult.Failed("Not connected")
             ) {
                 is ChatBridge.ReplyResult.Sent -> {
-                    optimisticIds -= m.id
-                    deliveries.remove(m.id)
-                    messages.removeAll { it.id == m.id }
+                    val outcome = resolveSent(result.id, m.id, m.message, null, 0, 0)
                     render()
-                    showSnack("Sent")
+                    if (outcome == SendReconcile.Outcome.QUEUED) {
+                        showSnackLong("Not confirmed by the server — queued and will be delivered automatically.")
+                    } else {
+                        showSnack("Sent")
+                    }
                 }
                 is ChatBridge.ReplyResult.Rejected -> {
                     deliveries[m.id] = Delivery.FAILED

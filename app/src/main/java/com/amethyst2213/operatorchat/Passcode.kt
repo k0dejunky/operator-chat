@@ -18,7 +18,18 @@ object Passcode {
     private const val KEY_HASH = "passcode_hash"
     private const val KEY_SALT = "passcode_salt"
     private const val KEY_ITERATIONS = "passcode_iterations"
+    private const val KEY_FAILS = "passcode_fails"
+    private const val KEY_LOCK_UNTIL = "passcode_lock_until"
     private const val DEFAULT_ITERATIONS = 120_000
+
+    /** Wrong entries before the first lockout kicks in. */
+    private const val MAX_FAILS = 5
+
+    /** First lockout window; doubles with every further failure. */
+    private const val BASE_LOCK_MS = 30_000L
+
+    /** Cap so a fat-fingered operator is never locked out for hours. */
+    private const val MAX_LOCK_MS = 15 * 60_000L
 
     fun isSet(context: Context): Boolean =
         prefs(context).getString(KEY_HASH, null)?.isNotEmpty() == true
@@ -32,6 +43,8 @@ object Passcode {
             .putString(KEY_SALT, saltHex)
             .putString(KEY_HASH, hash)
             .putInt(KEY_ITERATIONS, DEFAULT_ITERATIONS)
+            .remove(KEY_FAILS)
+            .remove(KEY_LOCK_UNTIL)
             .apply()
         return true
     }
@@ -45,9 +58,50 @@ object Passcode {
         return constantTimeEquals(actual, expected)
     }
 
+    /** Milliseconds until the throttle allows another attempt (0 = not locked). */
+    fun lockedForMs(context: Context): Long {
+        val until = prefs(context).getLong(KEY_LOCK_UNTIL, 0L)
+        return maxOf(0L, until - System.currentTimeMillis())
+    }
+
+    /**
+     * Verify with throttling. A wrong entry counts towards the lockout; a
+     * correct one clears the counter. Returns false while locked out even for
+     * the right passcode, so a brute-forcer gains nothing by retrying fast.
+     */
+    fun verifyThrottled(context: Context, pin: String): Boolean {
+        if (lockedForMs(context) > 0) return false
+
+        val ok = verify(context, pin)
+        val p = prefs(context)
+        if (ok) {
+            p.edit().remove(KEY_FAILS).remove(KEY_LOCK_UNTIL).apply()
+            return true
+        }
+
+        val fails = p.getInt(KEY_FAILS, 0) + 1
+        val edit = p.edit().putInt(KEY_FAILS, fails)
+        if (fails >= MAX_FAILS) {
+            val over = minOf(fails - MAX_FAILS, 10)
+            edit.putLong(KEY_LOCK_UNTIL, System.currentTimeMillis() + minOf(BASE_LOCK_MS shl over, MAX_LOCK_MS))
+        }
+        edit.apply()
+        return false
+    }
+
+    /** Remaining lockout, in whole seconds, for a message. 0 = not locked. */
+    fun lockedForSeconds(context: Context): Long = (lockedForMs(context) + 999) / 1000
+
+    /** Clears the failure counter and any active lockout (not the passcode). */
+    fun resetThrottle(context: Context) {
+        prefs(context).edit().remove(KEY_FAILS).remove(KEY_LOCK_UNTIL).apply()
+    }
+
     fun clear(context: Context) {
         prefs(context).edit()
-            .remove(KEY_SALT).remove(KEY_HASH).remove(KEY_ITERATIONS).apply()
+            .remove(KEY_SALT).remove(KEY_HASH).remove(KEY_ITERATIONS)
+            .remove(KEY_FAILS).remove(KEY_LOCK_UNTIL)
+            .apply()
     }
 
     private fun prefs(context: Context) =

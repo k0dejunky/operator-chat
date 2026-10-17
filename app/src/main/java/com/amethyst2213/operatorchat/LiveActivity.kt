@@ -39,7 +39,6 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /**
  * Live video broadcast: captures the device camera + mic, encodes H.264/AAC and
@@ -77,10 +76,9 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     private var recordFile: File? = null
     private var recording = false
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .build()
+    // The shared pinned client: every live call (session start/stop, the chat
+    // poller) must go through the same certificate pins as the inbox traffic.
+    private val client: OkHttpClient get() = ChatBridge.SHARED_CLIENT
 
     private val permLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
@@ -416,6 +414,14 @@ class LiveActivity : AppCompatActivity(), ConnectChecker {
     }
 
     override fun onDestroy() {
+        // Finalize a still-live session first: the RTMP stream dies with this
+        // activity, so /live/stop has to reach the server or the recording
+        // stays open forever. stopBroadcast() is a no-op when not live, and it
+        // captures base/token/key before clearing them.
+        try {
+            stopBroadcast()
+        } catch (_: Exception) {
+        }
         stopLiveChat()
         stopLocalRecord()
         releaseWakeLock()

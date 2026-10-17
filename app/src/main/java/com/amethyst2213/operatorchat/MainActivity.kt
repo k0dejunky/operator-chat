@@ -442,7 +442,7 @@ class MainActivity : AppCompatActivity() {
         }
         val creating = !Passcode.isSet(this)
 
-        AlertDialog.Builder(this)
+        val builder = AlertDialog.Builder(this)
             .setTitle(if (creating) "Set a passcode" else "Operator Chat locked")
             .setMessage(
                 if (creating) "This device has no biometrics enrolled. Set a passcode to protect the operator inbox."
@@ -458,15 +458,46 @@ class MainActivity : AppCompatActivity() {
                     } else {
                         onAuthenticated()
                     }
-                } else if (Passcode.verify(this, pin)) {
+                } else if (Passcode.verifyThrottled(this, pin)) {
                     onAuthenticated()
                 } else {
-                    toast("Incorrect passcode.")
+                    val lockSec = Passcode.lockedForSeconds(this)
+                    if (lockSec > 0) {
+                        val mins = (lockSec + 59) / 60
+                        toast("Too many attempts. Try again in about $mins min.")
+                    } else {
+                        toast("Incorrect passcode.")
+                    }
                     promptPasscode(onAuthenticated)
                 }
             }
             .setNegativeButton("Cancel", null)
-            .create()
+        if (!creating) {
+            builder.setNeutralButton("Forgot passcode?") { _, _ -> confirmPasscodeReset() }
+        }
+        builder.create().show()
+    }
+
+    /**
+     * Wipes the passcode AND the saved server URL + operator token, then sends
+     * the operator to Settings to enter them again. Clearing only the passcode
+     * would make the lock pointless: anyone could tap "forgot" and walk into
+     * the inbox, so the credentials the lock protects go with it.
+     */
+    private fun confirmPasscodeReset() {
+        AlertDialog.Builder(this)
+            .setTitle("Reset passcode?")
+            .setMessage(
+                "This also removes the saved server URL and operator token from " +
+                    "this device. You will need to enter them again in Settings."
+            )
+            .setPositiveButton("Reset") { _, _ ->
+                Passcode.clear(this)
+                SecurePrefs.clear(this)
+                toast("Passcode and credentials cleared. Re-enter them in Settings.")
+                startActivity(Intent(this, SettingsActivity::class.java))
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 

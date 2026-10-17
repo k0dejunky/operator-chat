@@ -615,7 +615,12 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         }
     }
     companion object {
-        private val SHARED_CLIENT: OkHttpClient by lazy {
+        /**
+         * The one client for every call to the site: timeouts, connection pool
+         * and certificate pinning. Live streaming and the live-chat poller use
+         * it too, so no call ever bypasses the pins.
+         */
+        internal val SHARED_CLIENT: OkHttpClient by lazy {
             val builder = OkHttpClient.Builder()
                 .connectTimeout(20, TimeUnit.SECONDS)
                 // Without a write timeout a stalled upload never fails: the
