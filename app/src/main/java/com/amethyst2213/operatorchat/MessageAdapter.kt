@@ -116,6 +116,7 @@ class MessageAdapter(
                     }
                     !m.attachmentThumbUrl.isNullOrBlank() -> {
                         image.visibility = View.VISIBLE
+                        image.contentDescription = ctx.getString(R.string.attachment_desc)
                         image.load(m.attachmentThumbUrl) {
                             crossfade(true)
                             placeholder(R.color.surface_elevated)
@@ -123,11 +124,16 @@ class MessageAdapter(
                         image.setOnClickListener { onImageClick(m) }
                     }
                     else -> {
+                        // No thumbnail (e.g. a video without a poster): keep the
+                        // file pill, but make it tappable so the attachment can
+                        // still be opened and played.
                         file.text = m.attachmentName
                         file.setCompoundDrawablesRelativeWithIntrinsicBounds(
                             R.drawable.ic_folder, 0, 0, 0
                         )
+                        file.contentDescription = ctx.getString(R.string.attachment_desc)
                         file.visibility = View.VISIBLE
+                        file.setOnClickListener { onImageClick(m) }
                     }
                 }
             }
@@ -156,8 +162,13 @@ class MessageAdapter(
             )
             if (retryable) {
                 meta.setOnClickListener { onRetryClick(m) }
+                // TalkBack: the meta line is a button when it retries.
+                meta.isFocusable = true
+                meta.isClickable = true
             } else {
                 meta.setOnClickListener(null)
+                meta.isFocusable = false
+                meta.isClickable = false
             }
         }
     }

@@ -110,6 +110,16 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val mediaExpired: Boolean,
     )
 
+    /**
+     * One SSE frame from the conversation stream. [typing] is the member's
+     * composer state; null when the payload carried no typing field (an older
+     * server), so the app never has to guess.
+     */
+    data class StreamFrame(
+        val messages: List<Message>,
+        val typing: Boolean?,
+    )
+
     /** GET /webhooks/chat/inbox — a page of conversations with a next-cursor. */
     suspend fun inbox(query: String = "", cursor: String? = null, limit: Int = 50): InboxPage = withContext(Dispatchers.IO) {
         val base = baseUrl.toHttpUrlOrNull() ?: throw IllegalArgumentException("Invalid base URL")
@@ -302,7 +312,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      * instead of waiting for the 30s stream window to close); callers loop
      * for continuous live updates.
      */
-    suspend fun streamOnce(conversationId: Long, since: Long): List<Message> = withContext(Dispatchers.IO) {
+    suspend fun streamOnce(conversationId: Long, since: Long): StreamFrame = withContext(Dispatchers.IO) {
         val req = authed()
             .url("$baseUrl/webhooks/chat/stream?conversation=$conversationId&since=$since")
             .header("Accept", "text/event-stream")
@@ -310,19 +320,24 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             .build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
-            val reader = resp.body?.source() ?: return@withContext emptyList()
+            val reader = resp.body?.source() ?: return@withContext StreamFrame(emptyList(), null)
             while (true) {
                 val line = reader.readUtf8Line() ?: break
                 if (!line.startsWith("data: ")) continue
                 try {
                     val json = JSONObject(line.removePrefix("data: "))
                     val msgs = parseMessages(json.optJSONArray("messages"), conversationId)
-                    if (msgs.isNotEmpty()) return@withContext msgs
+                    val typing = if (json.has("typing")) json.optBoolean("typing", false) else null
+                    // Return on a message batch OR a typing frame; a frame with
+                    // neither is a keepalive-shaped payload we can ignore.
+                    if (msgs.isNotEmpty() || typing != null) {
+                        return@withContext StreamFrame(msgs, typing)
+                    }
                 } catch (_: Exception) {
                     // ignore keepalive / partial
                 }
             }
-            emptyList()
+            StreamFrame(emptyList(), null)
         }
     }
 
@@ -573,46 +588,9 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     }
 
     private fun guessMediaType(f: File): String {
-        // Sniff the first bytes only. The old code called readBytes() on the
-        // whole file and then took 16 of them, so attaching a 25 MB video
-        // allocated a 25 MB array on the heap (and the request could die with
-        // an OOM before it ever started).
-        try {
-            val head = f.inputStream().use { ins ->
-                val buf = ByteArray(16)
-                var read = 0
-                while (read < buf.size) {
-                    val n = ins.read(buf, read, buf.size - read)
-                    if (n <= 0) break
-                    read += n
-                }
-                buf.copyOf(read)
-            }
-            val hex = head.joinToString("") { b -> String.format("%02X", b) }
-            when {
-                hex.startsWith("FFD8FF") -> return "image/jpeg"
-                hex.startsWith("89504E47") -> return "image/png"
-                hex.startsWith("47494638") -> return "image/gif"
-                hex.startsWith("52494646") && hex.length >= 24 &&
-                    hex.substring(16, 20) == "57454250" -> return "image/webp" // RIFF....WEBP
-                hex.length >= 24 && hex.substring(16, 20) == "66747970" -> return "video/mp4" // ....ftyp
-            }
-        } catch (_: Exception) {
-            // fall through to extension-based guess
-        }
-
-        val name = f.name.lowercase()
-        return when {
-            name.endsWith(".png") -> "image/png"
-            name.endsWith(".jpg") || name.endsWith(".jpeg") -> "image/jpeg"
-            name.endsWith(".gif") -> "image/gif"
-            name.endsWith(".webp") -> "image/webp"
-            name.endsWith(".mp4") -> "video/mp4"
-            name.endsWith(".webm") -> "video/webm"
-            name.endsWith(".txt") -> "text/plain"
-            name.endsWith(".pdf") -> "application/pdf"
-            else -> "application/octet-stream"
-        }
+        // Sniffing lives in MediaSniff so the media viewer uses the same rules;
+        // it reads only the first bytes (the old code read the whole file).
+        return MediaSniff.typeOf(f)
     }
     companion object {
         /**

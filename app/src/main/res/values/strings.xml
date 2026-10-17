@@ -21,6 +21,8 @@
     <string name="composer_hint">Message…</string>
     <string name="composer_send">Send</string>
     <string name="composer_attach">Attach</string>
+    <string name="typing_indicator">Member is typing…</string>
+    <string name="attachment_desc">Attachment. Tap to view.</string>
     <string name="composer_emoji">Emoji</string>
     <string name="outbox_review">Review</string>
     <string name="outbox_queued_one">1 reply queued — tap to review</string>

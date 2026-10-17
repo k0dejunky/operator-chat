@@ -5,6 +5,9 @@ import android.content.Intent
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.text.InputType
 import android.view.LayoutInflater
@@ -31,9 +34,11 @@ import androidx.recyclerview.widget.RecyclerView
 import com.amethyst2213.operatorchat.databinding.ActivityChatBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -102,6 +107,17 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var adapter: MessageAdapter
     private var streamJob: Job? = null
 
+    /** "Member is typing…" signal with client-side expiry. */
+    private val typingPulse = TypingPulse()
+    private val typingHandler = Handler(Looper.getMainLooper())
+    private val typingRecheck = object : Runnable {
+        override fun run() {
+            val active = typingPulse.isActive(SystemClock.elapsedRealtime())
+            renderTyping(active)
+            if (active) typingHandler.postDelayed(this, 2000L)
+        }
+    }
+
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
 
     /** Zone the server stamps its timestamps in (Settings > timezone). */
@@ -123,8 +139,18 @@ class ChatActivity : AppCompatActivity() {
             val file = cameraOutput
             cameraOutput = null
             if (ok && file != null && file.exists() && file.length() > 0) {
-                pendingAttachment = file
-                showSnack("Photo ready — it will be sent with your reply.")
+                // Full-res captures are downscaled + EXIF-rotated off the main
+                // thread before they become the pending attachment.
+                lifecycleScope.launch {
+                    val ready = withContext(Dispatchers.IO) { preparedImage(file) }
+                    if (ready.length() > MAX_ATTACHMENT_BYTES) {
+                        ready.delete()
+                        showSnack("Photo too large (max 25 MB) — try a lower resolution.")
+                        return@launch
+                    }
+                    pendingAttachment = ready
+                    showSnack("Photo ready — it will be sent with your reply.")
+                }
             } else {
                 file?.delete()
                 showSnack("Photo cancelled.")
@@ -226,6 +252,9 @@ class ChatActivity : AppCompatActivity() {
         streamActive = false
         streamJob?.cancel()
         streamJob = null
+        typingPulse.clear()
+        typingHandler.removeCallbacks(typingRecheck)
+        renderTyping(false)
         super.onStop()
     }
 
@@ -502,11 +531,12 @@ class ChatActivity : AppCompatActivity() {
             var backoffMs = 1500L
             while (streamActive) {
                 try {
-                    val incoming = b.streamOnce(conversationId, latestId)
-                    val fresh = incoming.filter {
+                    val frame = b.streamOnce(conversationId, latestId)
+                    val fresh = frame.messages.filter {
                         it.id > latestId && messages.none { m -> m.id == it.id }
                     }
                     if (fresh.isNotEmpty()) collectIncoming(fresh)
+                    frame.typing?.let { applyTyping(it) }
                     backoffMs = 1500L
                     // The server closes each SSE connection per poll, so this
                     // delay is what stops the old 100% CPU spin.
@@ -519,6 +549,18 @@ class ChatActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    /** Apply a typing frame from the stream to the indicator above the composer. */
+    private fun applyTyping(typing: Boolean) {
+        val active = typingPulse.onSignal(typing, SystemClock.elapsedRealtime())
+        renderTyping(active)
+        typingHandler.removeCallbacks(typingRecheck)
+        if (active) typingHandler.postDelayed(typingRecheck, 2000L)
+    }
+
+    private fun renderTyping(active: Boolean) {
+        binding.typingIndicator.isVisible = active
     }
 
     /**
@@ -709,10 +751,13 @@ class ChatActivity : AppCompatActivity() {
                 }
 
                 is ChatBridge.ReplyResult.Failed -> {
-                    // Queue it for automatic delivery with backoff.
+                    // Queue it for automatic delivery with backoff. The stash
+                    // copies the file, so it goes to IO, never the main thread.
                     deliveries[placeholderId] = Delivery.QUEUED
                     val stashed = pending?.let {
-                        SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey)
+                        withContext(Dispatchers.IO) {
+                            SendQueue.stashAttachment(this@ChatActivity, it, idempotencyKey)
+                        }
                     }
                     SendQueue.add(
                         this@ChatActivity, conversationId, text, idempotencyKey,
@@ -792,7 +837,7 @@ class ChatActivity : AppCompatActivity() {
      * and the stream carries the real message, [collectIncoming] drops the
      * placeholder by its matching text.
      */
-    private fun queueUnconfirmed(
+    private suspend fun queueUnconfirmed(
         placeholderId: Long,
         text: String,
         attachment: File?,
@@ -800,7 +845,10 @@ class ChatActivity : AppCompatActivity() {
         maxViews: Int,
     ) {
         val key = SendReconcile.newKey()
-        val stashed = attachment?.let { SendQueue.stashAttachment(this, it, key) }
+        // The stash copies the file into filesDir — never on the main thread.
+        val stashed = attachment?.let {
+            withContext(Dispatchers.IO) { SendQueue.stashAttachment(this@ChatActivity, it, key) }
+        }
         SendQueue.add(this, conversationId, text, key, stashed, expiresInMinutes, maxViews)
         attemptKeys[placeholderId] = key
         deliveries[placeholderId] = Delivery.QUEUED
@@ -929,54 +977,83 @@ class ChatActivity : AppCompatActivity() {
     }
 
     /**
-     * Copy a picked file into the cache.
+     * Copy a picked file into the cache, then shrink large photos.
      *
-     * The size is checked BEFORE the copy (so a 2 GB pick is rejected without
-     * writing it) and again DURING the copy (so a provider that lies about its
-     * size still cannot fill the cache).
+     * All of this is disk IO (up to 25 MB + a decode/encode pass), so it runs
+     * on [Dispatchers.IO]; the size is checked BEFORE the copy (so a 2 GB pick
+     * is rejected without writing it) and again DURING the copy (so a provider
+     * that lies about its size still cannot fill the cache).
      */
     private fun attachFromUri(uri: Uri) {
-        try {
-            val resolver = contentResolver
-
-            resolver.query(uri, null, null, null, null)?.use { c ->
-                val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
-                if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) {
-                    val size = c.getLong(idx)
-                    if (size > MAX_ATTACHMENT_BYTES) {
-                        showSnack("File too large (max 25 MB).")
-                        return
-                    }
-                }
-            }
-
-            val name = URLDecoder.decode(uri.lastPathSegment ?: "attachment", "UTF-8")
-            val tmp = File(cacheDir, "attachment_${System.currentTimeMillis()}_${sanitize(name)}")
-            var written = 0L
-
-            resolver.openInputStream(uri)?.use { ins ->
-                FileOutputStream(tmp).use { out ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val read = ins.read(buffer)
-                        if (read <= 0) break
-                        written += read
-                        if (written > MAX_ATTACHMENT_BYTES) throw IOException("too large")
-                        out.write(buffer, 0, read)
-                    }
-                }
-            } ?: throw IOException("could not open the file")
-
-            if (tmp.length() > MAX_ATTACHMENT_BYTES) {
-                tmp.delete()
+        lifecycleScope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) { importAttachment(uri) }
+                pendingAttachment = file
+                showSnack("Attachment ready — it will be sent with your reply.")
+            } catch (_: AttachmentTooLargeException) {
                 showSnack("File too large (max 25 MB).")
-                return
+            } catch (e: Exception) {
+                showSnack("Could not read attachment: ${e.message ?: ""}")
             }
+        }
+    }
 
-            pendingAttachment = tmp
-            showSnack("Attachment ready — it will be sent with your reply.")
-        } catch (e: Exception) {
-            showSnack("Could not read attachment: ${e.message ?: ""}")
+    private class AttachmentTooLargeException : IOException("too large")
+
+    /** Blocking import: size-check, copy into the cache, compress large photos. */
+    private fun importAttachment(uri: Uri): File {
+        val resolver = contentResolver
+
+        resolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            if (idx >= 0 && c.moveToFirst() && !c.isNull(idx)) {
+                if (c.getLong(idx) > MAX_ATTACHMENT_BYTES) throw AttachmentTooLargeException()
+            }
+        }
+
+        val name = URLDecoder.decode(uri.lastPathSegment ?: "attachment", "UTF-8")
+        var tmp = File(cacheDir, "attachment_${System.currentTimeMillis()}_${sanitize(name)}")
+        var written = 0L
+
+        resolver.openInputStream(uri)?.use { ins ->
+            FileOutputStream(tmp).use { out ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = ins.read(buffer)
+                    if (read <= 0) break
+                    written += read
+                    if (written > MAX_ATTACHMENT_BYTES) throw AttachmentTooLargeException()
+                    out.write(buffer, 0, read)
+                }
+            }
+        } ?: run {
+            tmp.delete()
+            throw IOException("could not open the file")
+        }
+
+        tmp = preparedImage(tmp)
+        if (tmp.length() > MAX_ATTACHMENT_BYTES) {
+            tmp.delete()
+            throw AttachmentTooLargeException()
+        }
+        return tmp
+    }
+
+    /**
+     * Downscale + EXIF-rotate a large photo in place (returns a new cache file;
+     * the original is deleted). Non-images and small already-optimized files
+     * come back untouched. Blocking — call from a background dispatcher.
+     */
+    private fun preparedImage(source: File): File {
+        val mime = MediaSniff.typeOf(source)
+        if (!ImagePrep.shouldCompress(mime, source.length())) return source
+        val dest = File(cacheDir, "attachment_${System.currentTimeMillis()}_photo.jpg")
+        return if (ImagePrep.compressToJpeg(source, dest)) {
+            source.delete()
+            dest
+        } else {
+            dest.delete()
+            source
         }
     }
 

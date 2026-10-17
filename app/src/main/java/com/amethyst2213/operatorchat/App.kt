@@ -19,7 +19,9 @@ class App : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        pruneTemporaryCache()
+        // Cache pruning is dozens of stat/unlink calls — keep it off the main
+        // thread so a cold start is never blocked by housekeeping.
+        Thread { pruneTemporaryCache() }.start()
 
         // Periodic safety net: re-drain the offline outbox every 15 minutes so
         // a message is never stuck forever after WorkManager exhausts its

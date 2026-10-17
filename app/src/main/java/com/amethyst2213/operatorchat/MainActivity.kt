@@ -40,9 +40,11 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import java.util.TimeZone
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Login + users list. Shows only users with unread member messages (favourites
@@ -451,24 +453,33 @@ class MainActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton(if (creating) "Set passcode" else "Unlock") { _, _ ->
                 val pin = input.text.toString().trim()
-                if (creating) {
-                    if (!Passcode.set(this, pin)) {
-                        toast("Passcode must be 4-32 digits.")
-                        promptPasscode(onAuthenticated)
-                    } else {
+                // PBKDF2 (120k iterations) must never run on the main thread,
+                // so set/verify happen on the default pool and the dialog
+                // follow-ups come back to the UI thread.
+                lifecycleScope.launch {
+                    val ok = withContext(Dispatchers.Default) {
+                        if (creating) Passcode.set(this@MainActivity, pin)
+                        else Passcode.verifyThrottled(this@MainActivity, pin)
+                    }
+                    if (creating) {
+                        if (!ok) {
+                            toast("Passcode must be 4-32 digits.")
+                            promptPasscode(onAuthenticated)
+                        } else {
+                            onAuthenticated()
+                        }
+                    } else if (ok) {
                         onAuthenticated()
-                    }
-                } else if (Passcode.verifyThrottled(this, pin)) {
-                    onAuthenticated()
-                } else {
-                    val lockSec = Passcode.lockedForSeconds(this)
-                    if (lockSec > 0) {
-                        val mins = (lockSec + 59) / 60
-                        toast("Too many attempts. Try again in about $mins min.")
                     } else {
-                        toast("Incorrect passcode.")
+                        val lockSec = Passcode.lockedForSeconds(this@MainActivity)
+                        if (lockSec > 0) {
+                            val mins = (lockSec + 59) / 60
+                            toast("Too many attempts. Try again in about $mins min.")
+                        } else {
+                            toast("Incorrect passcode.")
+                        }
+                        promptPasscode(onAuthenticated)
                     }
-                    promptPasscode(onAuthenticated)
                 }
             }
             .setNegativeButton("Cancel", null)

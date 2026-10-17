@@ -41,7 +41,7 @@
         android:maxHeight="320dp"
         android:scaleType="centerCrop"
         android:background="@drawable/bg_bubble_in"
-        android:contentDescription="Attachment"
+        android:contentDescription="@string/attachment_desc"
         android:visibility="gone" />
 
     <TextView

@@ -67,15 +67,76 @@ class LayoutComposerTest {
     }
 
     @Test
-    fun `the composer is a horizontal row holding field plus a send button`() {
+    fun `the composer stacks a typing indicator over a horizontal input row`() {
         val root = parse("activity_chat.xml")
         val composer = byId(root, "composer")
-        assertNotNull("activity_chat.xml must have the composer row", composer)
-        assertEquals("horizontal", attr(composer!!, "orientation"))
+        assertNotNull("activity_chat.xml must have the composer", composer)
+        assertEquals("vertical", attr(composer!!, "orientation"))
 
+        val typing = byId(root, "typing_indicator")
+        assertNotNull("composer must contain the typing indicator", typing)
+        assertEquals("@string/typing_indicator", attr(typing!!, "text"))
+        assertEquals("the indicator starts hidden", "gone", attr(typing, "visibility"))
+
+        // The input row keeps the v2.46/v2.47 contract: horizontal, weighted
+        // field between attach and send.
+        val row = ancestorByTag(byId(root, "reply_input")!!, "LinearLayout")
+        assertNotNull("reply_input must sit in a LinearLayout row", row)
+        assertEquals("horizontal", attr(row!!, "orientation"))
         for (id in listOf("reply_input", "attach_button", "send_button")) {
-            assertNotNull("composer must contain $id", byId(root, id))
+            assertNotNull("the input row must contain $id", byId(row, id))
         }
+    }
+
+    @Test
+    fun `the message field is capped at the send contract length`() {
+        val input = byId(parse("activity_chat.xml"), "reply_input")!!
+        // SendReconcile classifies a confirmed send by the server-trimmed
+        // text; letting the field exceed the server cap would make long
+        // messages look "unconfirmed" and get queued under a fresh key.
+        assertEquals(
+            "reply_input maxLength must track SendReconcile.MAX_REPLY_CHARS",
+            SendReconcile.MAX_REPLY_CHARS.toString(),
+            attr(input, "maxLength"),
+        )
+    }
+
+    @Test
+    fun `attachment previews keep their accessibility label`() {
+        val strings = parseValues("strings.xml")
+        for (name in listOf("typing_indicator", "attachment_desc")) {
+            val node = descendants(strings).firstOrNull { it.getAttribute("name") == name }
+            assertNotNull("strings.xml must define $name", node)
+            assertTrue("$name must not be empty", node!!.textContent.isNotBlank())
+        }
+        for (layout in listOf("item_message_in.xml", "item_message_out.xml")) {
+            val image = descendants(parse(layout)).firstOrNull { it.tagName == "ImageView" }
+            assertNotNull("$layout must have an ImageView", image)
+            assertEquals(
+                "$layout: the attachment image must carry a screen-reader label",
+                "@string/attachment_desc",
+                attr(image!!, "contentDescription"),
+            )
+        }
+    }
+
+    private fun ancestorByTag(start: Element, tag: String): Element? {
+        var node = start.parentNode as? Element
+        while (node != null) {
+            if (node.tagName == tag) return node
+            node = node.parentNode as? Element
+        }
+        return null
+    }
+
+    private fun parseValues(name: String): Element {
+        val f = File(File("src/main/res/values"), name)
+        assertTrue("missing resource file: ${f.path}", f.isFile)
+        val doc = DocumentBuilderFactory.newInstance()
+            .apply { isNamespaceAware = false }
+            .newDocumentBuilder()
+            .parse(f)
+        return doc.documentElement
     }
 
     @Test

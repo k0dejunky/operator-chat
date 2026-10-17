@@ -11,8 +11,8 @@ android {
         applicationId = "com.amethyst2213.operatorchat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 59
-        versionName = "2.48"
+        versionCode = 60
+        versionName = "2.49"
 
         // Release uses the strict HTTPS-only network config; debug allows the
         // dev server cleartext carve-out.
@@ -61,6 +61,11 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil:2.6.0")
     implementation("org.json:json:20240303")
+    // In-chat video playback (message attachments) and EXIF handling for
+    // client-side image compression before upload.
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     // Live video broadcast (operator -> MediaMTX via RTMP).
     implementation("com.github.pedroSG94.RootEncoder:library:2.6.1")
     implementation("com.github.pedroSG94.RootEncoder:extra-sources:2.6.1")
