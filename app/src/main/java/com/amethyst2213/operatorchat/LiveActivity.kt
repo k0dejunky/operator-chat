@@ -69,6 +69,15 @@ class LiveActivity : AppCompatActivity() {
     /** The file the recording is written to. */
     private var recordFile by mutableStateOf<String?>(null)
 
+    /** The operator pressed "Go live" and the camera permission was asked for. */
+    private var wantToGoLive = false
+
+    /** Why the last attempt to start a broadcast failed. */
+    private var liveStartError = ""
+
+    /** A progress note from the encoder ("Connecting...", "Starting the camera..."). */
+    private var note by mutableStateOf<String?>(null)
+
     private var chatJob: Job? = null
     private var stateJob: Job? = null
     private var statsJob: Job? = null
@@ -87,6 +96,13 @@ class LiveActivity : AppCompatActivity() {
             prepareCamera()
             if (!mic) {
                 error = "No microphone permission: the broadcast will have no sound."
+            }
+            // The operator pressed "Go live" and was asked for the camera:
+            // carry on with the broadcast instead of making them press the
+            // button a second time.
+            if (wantToGoLive) {
+                wantToGoLive = false
+                goLive()
             }
         } else {
             error = "The camera permission is needed to go live."
@@ -110,6 +126,7 @@ class LiveActivity : AppCompatActivity() {
                     chat = chatLines,
                     chatDraft = chatDraft,
                     error = error,
+                    note = note,
                     onGoLive = { goLive() },
                     onStop = { stopBroadcast() },
                     onFlipCamera = { session?.flipCamera() },
@@ -165,7 +182,9 @@ class LiveActivity : AppCompatActivity() {
                     }
 
                     override fun onLog(message: String) {
-                        runOnUiThread { error = message }
+                        // A progress note, not an error: "Connecting..." in a
+                        // red banner reads like a failure.
+                        runOnUiThread { note = message }
                     }
                 })
                 session = created
@@ -222,9 +241,12 @@ class LiveActivity : AppCompatActivity() {
 
     private fun goLive() {
         if (!hasPermissions()) {
+            // The broadcast continues by itself once the camera is allowed.
+            wantToGoLive = true
             permLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
             return
         }
+        wantToGoLive = false
         val base = base()
         val token = token()
         if (base.isEmpty() || token.isEmpty()) {
@@ -232,6 +254,7 @@ class LiveActivity : AppCompatActivity() {
             return
         }
         error = null
+        note = null
         state = BroadcastState.Preparing
 
         lifecycleScope.launch {
@@ -249,7 +272,9 @@ class LiveActivity : AppCompatActivity() {
                     }
 
                     override fun onLog(message: String) {
-                        runOnUiThread { error = message }
+                        // A progress note, not an error: "Connecting..." in a
+                        // red banner reads like a failure.
+                        runOnUiThread { note = message }
                     }
                 })
                 session = created
@@ -260,7 +285,8 @@ class LiveActivity : AppCompatActivity() {
 
             val started = withContext(Dispatchers.IO) { startLiveSession(base, token) }
             if (started == null) {
-                state = BroadcastState.Failed("Could not start the live session.")
+                state = BroadcastState.Failed(liveStartError)
+                error = liveStartError
                 return@launch
             }
             rtmpUrl = started.first
@@ -463,6 +489,14 @@ class LiveActivity : AppCompatActivity() {
 
     private fun token(): String = SecurePrefs.token(this).trim()
 
+    /**
+     * Start a broadcast session on the server.
+     *
+     * The reason a failure failed is kept: a token that cannot broadcast
+     * (the shared chat key, for instance) is refused with 403, and the
+     * operator needs to be told THAT - "the live session could not be
+     * started" is not an answer.
+     */
     private fun startLiveSession(base: String, token: String): Pair<String, String>? = try {
         val req = Request.Builder()
             .url(base + "/live/start")
@@ -470,12 +504,25 @@ class LiveActivity : AppCompatActivity() {
             .post("".toRequestBody("application/json".toMediaType()))
             .build()
         client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) return@use null
+            if (!resp.isSuccessful) {
+                liveStartError = when (resp.code) {
+                    403 -> "This token cannot start a broadcast. Create an operator device token " +
+                        "in the admin panel (Chat) and sign in with that one."
+                    401 -> "The server refused the token. Sign in again in Settings."
+                    else -> "The live session could not be started (HTTP ${resp.code})."
+                }
+                return@use null
+            }
             val json = JSONObject(resp.body?.string().orEmpty())
-            if (!json.optBoolean("ok", false)) return@use null
+            if (!json.optBoolean("ok", false)) {
+                liveStartError = json.optString("error", "The live session could not be started.")
+                return@use null
+            }
+            liveStartError = ""
             json.optString("rtmp_url", "") to json.optString("stream_key", "")
         }
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        liveStartError = "The server could not be reached: ${e.message ?: "unknown error"}"
         null
     }
 

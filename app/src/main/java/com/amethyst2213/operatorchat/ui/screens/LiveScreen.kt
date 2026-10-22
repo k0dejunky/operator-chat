@@ -74,6 +74,7 @@ fun LiveScreen(
     chat: List<LiveChatLine>,
     chatDraft: String,
     error: String?,
+    note: String? = null,
     onGoLive: () -> Unit,
     onStop: () -> Unit,
     onFlipCamera: () -> Unit,
@@ -160,6 +161,13 @@ fun LiveScreen(
 
         if (!error.isNullOrBlank()) {
             ErrorBanner(error, Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        } else if (!note.isNullOrBlank()) {
+            Text(
+                text = note,
+                style = MaterialTheme.typography.bodySmall,
+                color = Palette.TextSecondary,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+            )
         }
 
         // The preview. It is a fixed box: the old one was inside a

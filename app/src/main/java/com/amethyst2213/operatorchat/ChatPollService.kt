@@ -117,6 +117,11 @@ class ChatPollService : Service() {
                     since = maxOf(since, events.maxOf { it.id })
                     prefs.edit().putLong("events_since", since).apply()
                 }
+                // The server holds the stream for its window, but a server
+                // that answers at once must not turn this into a spin - and
+                // a spin is what trips the rate limiter and leaves the
+                // operator with an empty inbox.
+                delay(1000)
             } catch (_: Exception) {
                 // Stream dropped/reconnect: back off with jitter so the radio
                 // is not hammered; the adaptive fallback covers the gap.
@@ -166,7 +171,15 @@ class ChatPollService : Service() {
                         }
                     }
                     seenRows += page.items.size
-                    page = bridge.inbox(cursor = page.nextCursor)
+                    // The cursor is the end of the list. Without it the
+                    // request returns the FIRST page again, and the loop
+                    // walks the same 50 conversations over and over - about
+                    // three hundred requests in a burst, which is what
+                    // tripped the rate limiter and left the operator with an
+                    // empty inbox and a "Connection failed" banner.
+                    val next = page.nextCursor
+                    if (next.isNullOrBlank()) break
+                    page = bridge.inbox(cursor = next)
                 }
                 primed = true
                 backoffMs = 30000L

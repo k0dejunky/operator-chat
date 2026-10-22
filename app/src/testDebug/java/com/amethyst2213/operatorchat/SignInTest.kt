@@ -33,6 +33,14 @@ class SignInTest {
         val context = compose.activity
         SecurePrefs.clear(context)
 
+        // The update check goes out to the network when the operator
+        // connects. The throttle is honoured, so a recent check means no
+        // request - and the test does not wait for the network.
+        context.getSharedPreferences("operator_chat", android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putLong("update_checked_at", System.currentTimeMillis())
+            .apply()
+
         // The first field is the server address, the second the token.
         val fields = compose.onAllNodes(hasSetTextAction())
         fields[0].performTextInput("http://127.0.0.1:9/gallery")
