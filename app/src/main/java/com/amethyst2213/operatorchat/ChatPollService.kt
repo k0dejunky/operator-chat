@@ -305,15 +305,41 @@ class ChatPollService : Service() {
         broadcastRefresh()
     }
 
-    private fun notifyNewEvent(ev: ChatBridge.ChatEvent) {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) {
+    /**
+     * The channel a new-message notification goes to.
+     *
+     * The quiet hours never silenced anything: the notification was posted
+     * to a channel created with IMPORTANCE_HIGH, and on Android 8+ the
+     * CHANNEL decides whether a notification makes a sound - a per
+     * notification setSound(null) is ignored. The importance of a channel
+     * cannot be lowered once it has been used, so the quiet hours need
+     * their own (LOW) channel.
+     */
+    private fun newMessageChannel(nm: NotificationManager): String {
+        if (Build.VERSION.SDK_INT < 26) return CHANNEL_ID_NEW
+        val quiet = quietNow()
+        val id = if (quiet) CHANNEL_ID_QUIET else CHANNEL_ID_NEW
+        val existing = nm.getNotificationChannel(id)
+        if (existing == null) {
             nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID_NEW, "New member messages", NotificationManager.IMPORTANCE_HIGH)
+                NotificationChannel(
+                    id,
+                    if (quiet) "New member messages (quiet)" else "New member messages",
+                    if (quiet) NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                }
             )
         }
+        return id
+    }
+
+    private fun notifyNewEvent(ev: ChatBridge.ChatEvent) {
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        val channel = newMessageChannel(nm)
         val name = ev.username.ifEmpty { "member" }
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID_NEW)
+        val builder = NotificationCompat.Builder(this, channel)
             .setContentTitle("New message from $name")
             .setContentText(ev.message.take(120))
             .setSmallIcon(android.R.drawable.ic_dialog_email)
@@ -352,13 +378,9 @@ class ChatPollService : Service() {
 
     private fun notifyNewMessage(c: ChatBridge.Conversation, tone: String?) {
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= 26) {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID_NEW, "New member messages", NotificationManager.IMPORTANCE_HIGH)
-            )
-        }
+        val channel = newMessageChannel(nm)
         val name = c.username.ifEmpty { c.userEmail }
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID_NEW)
+        val builder = NotificationCompat.Builder(this, channel)
             .setContentTitle("New message from $name")
             .setContentText("${c.unreadReplyable} new message(s) — tap to open")
             .setSmallIcon(android.R.drawable.ic_dialog_email)
@@ -395,6 +417,7 @@ class ChatPollService : Service() {
     companion object {
         private const val CHANNEL_ID = "operator_chat_foreground"
         private const val CHANNEL_ID_NEW = "operator_chat_new"
+        private const val CHANNEL_ID_QUIET = "operator_chat_new_quiet"
         private const val NOTIF_ID = 1001
         const val ACTION_CHAT_EVENT = "com.amethyst2213.operatorchat.CHAT_EVENT"
     }

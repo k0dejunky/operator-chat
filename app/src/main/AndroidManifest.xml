@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- The live broadcast runs in a foreground service so it survives the
+         operator switching apps or the screen locking. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Live video broadcast from the app's own camera + mic (MediaMTX RTMP). -->
     <uses-permission android:name="android.permission.CAMERA" />
@@ -53,6 +57,10 @@
             android:exported="false" />
 
         <activity
+            android:name=".ScheduleActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".MediaViewerActivity"
             android:exported="false"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
@@ -61,6 +69,13 @@
             android:name=".ChatPollService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- The broadcast service: it owns the camera, the encoder and the
+             RTMP connection, so the stream survives the Activity. -->
+        <service
+            android:name=".live.LiveBroadcastService"
+            android:exported="false"
+            android:foregroundServiceType="camera|microphone|dataSync" />
 
         <receiver
             android:name=".ChatActionReceiver"

@@ -29,9 +29,13 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.lifecycle.lifecycleScope
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
-import com.amethyst2213.operatorchat.databinding.ActivityChatBinding
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import com.amethyst2213.operatorchat.ui.screens.ThreadScreen
+import com.amethyst2213.operatorchat.ui.theme.OperatorTheme
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Dispatchers
@@ -75,7 +79,34 @@ import java.util.UUID
  */
 class ChatActivity : AppCompatActivity() {
 
-    private lateinit var binding: ActivityChatBinding
+    /** The rows the thread shows (day separators, grouping, delivery state). */
+    private var rows by mutableStateOf<List<ChatRow>>(emptyList())
+
+    /** The reply the operator is typing. */
+    private var draft by mutableStateOf("")
+
+    /** "The member is typing…" */
+    private var typing by mutableStateOf(false)
+
+    /** The outbox strip: the queued replies, or the last rejected one. */
+    private var outboxText by mutableStateOf<String?>(null)
+    private var outboxActionLabel by mutableStateOf("")
+
+    /** A message for the operator (a failed send, a copied row). */
+    private var notice by mutableStateOf<String?>(null)
+
+    /** The search box in the thread header. */
+    private var searchOpen by mutableStateOf(false)
+    private var searchQuery by mutableStateOf("")
+
+    /** The ids of the pinned messages. */
+    private var pinnedIds by mutableStateOf<Set<Long>>(emptySet())
+
+    /** The AI mode of this conversation. */
+    private var aiMode by mutableStateOf("operator")
+
+    /** The member's name, for the header. */
+    private var memberName by mutableStateOf("")
 
     private var bridge: ChatBridge? = null
     private var conversationId: Long = 0
@@ -104,7 +135,6 @@ class ChatActivity : AppCompatActivity() {
      */
     private val attemptKeys = mutableMapOf<Long, String>()
 
-    private lateinit var adapter: MessageAdapter
     private var streamJob: Job? = null
 
     /** "Member is typing…" signal with client-side expiry. */
@@ -179,66 +209,64 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityChatBinding.inflate(layoutInflater)
-        setContentView(binding.root)
 
         conversationId = intent.getLongExtra("conversation_id", 0)
         memberReplyEnabled = intent.getBooleanExtra("member_reply_enabled", true)
+        aiMode = intent.getStringExtra("ai_mode") ?: "operator"
+        memberName = intent.getStringExtra("username").orEmpty()
 
-        binding.replyInput.setText(prefs.getString("draft_$conversationId", "").orEmpty())
-
-        setSupportActionBar(binding.chatToolbar)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        draft = prefs.getString("draft_$conversationId", "").orEmpty()
 
         val url = intent.getStringExtra("base_url") ?: ""
         val token = intent.getStringExtra("token") ?: SecurePrefs.token(this)
-        val username = intent.getStringExtra("username")
-        supportActionBar?.title = username?.ifBlank { null } ?: "Conversation #$conversationId"
-        updateSubtitle()
-
-        // Keep the composer above the soft keyboard (edge-to-edge on targetSdk
-        // 35 means adjustResize alone is not enough) and pad the list so its
-        // last row is never hidden behind the composer.
-        ViewCompat.setOnApplyWindowInsetsListener(binding.chatRoot) { _, insets ->
-            val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars()).bottom
-            val shift = maxOf(ime, bars)
-            binding.composer.translationY = -shift.toFloat()
-            binding.messageRecycler.setPadding(0, 0, 0, shift)
-            binding.chatEmpty.setPadding(32, 0, 32, shift)
-            insets
-        }
-        ViewCompat.requestApplyInsets(binding.chatRoot)
-
         bridge = ChatBridge(url, token)
 
-        adapter = MessageAdapter(
-            onImageClick = { openFullImage(it) },
-            onRetryClick = { retryMessage(it) },
-        )
-        binding.messageRecycler.layoutManager =
-            LinearLayoutManager(this).apply { stackFromEnd = true }
-        binding.messageRecycler.adapter = adapter
-
-        // Lazy-load older messages when the user scrolls to the top. `dy <= 0`
-        // keeps the initial layout pass (which also reports position 0) from
-        // immediately pulling in the previous page.
-        binding.messageRecycler.addOnScrollListener(object : RecyclerView.OnScrollListener() {
-            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
-                val lm = rv.layoutManager as? LinearLayoutManager ?: return
-                if (lm.findFirstVisibleItemPosition() in 0..1 && dy <= 0) loadOlder()
-                if (isAtBottom()) binding.scrollBottomFab.hide() else binding.scrollBottomFab.show()
+        setContent {
+            OperatorTheme {
+                ThreadScreen(
+                    conversationId = conversationId,
+                    title = memberName.ifBlank { "Conversation #$conversationId" },
+                    subtitle = getString(
+                        if (memberReplyEnabled) R.string.chat_replies_on else R.string.chat_replies_off
+                    ),
+                    rows = rows,
+                    draft = draft,
+                    sending = false,
+                    queued = SendQueue.pendingFor(this@ChatActivity, conversationId).size,
+                    typing = typing,
+                    canReply = true,
+                    memberReplyEnabled = memberReplyEnabled,
+                    aiMode = aiMode,
+                    pinnedIds = pinnedIds,
+                    searchOpen = searchOpen,
+                    searchQuery = searchQuery,
+                    error = notice,
+                    onDraftChange = { draft = it },
+                    onSend = { sendReply() },
+                    onAttach = { showAttachChooser() },
+                    onToggleSearch = {
+                        searchOpen = !searchOpen
+                        if (!searchOpen) searchQuery = ""
+                    },
+                    onSearchQueryChange = { searchQuery = it },
+                    onPin = { id -> pinMessage(id, true) },
+                    onUnpin = { id -> pinMessage(id, false) },
+                    onDelete = { id -> deleteMessage(id) },
+                    onCopy = { id -> copyMessage(id) },
+                    onToggleMemberReplies = { on -> toggleMemberReplies(on) },
+                    onModeChange = { mode -> changeAiMode(mode) },
+                    onLoadOlder = { loadOlder() },
+                    onBack = { finish() },
+                    outboxText = outboxText,
+                    outboxActionLabel = outboxActionLabel,
+                    onOutboxAction = { onOutboxAction() },
+                )
             }
-        })
-
-        binding.sendButton.setOnClickListener { sendReply() }
-        binding.attachButton.setOnClickListener { showAttachChooser() }
-        binding.scrollBottomFab.setOnClickListener { scrollToBottom() }
-        binding.outboxAction.setOnClickListener { onOutboxAction() }
-        binding.outboxBar.setOnClickListener { onOutboxAction() }
+        }
 
         syncOutbox()
         render()
+        loadPinned()
     }
 
     override fun onStart() {
@@ -262,7 +290,7 @@ class ChatActivity : AppCompatActivity() {
         // Persist the draft once instead of a SharedPreferences write per
         // keystroke.
         prefs.edit()
-            .putString("draft_$conversationId", binding.replyInput.text.toString())
+            .putString("draft_$conversationId", draft)
             .apply()
         super.onPause()
     }
@@ -299,46 +327,27 @@ class ChatActivity : AppCompatActivity() {
      * maths is unit-testable and the adapter stays a dumb binder.
      */
     private fun render() {
-        val rows = ChatRows.build(messages, deliveries, siteZone)
-        adapter.submitList(rows)
-        binding.chatEmpty.isVisible = rows.isEmpty()
-        binding.messageRecycler.isVisible = rows.isNotEmpty()
-        if (wasAtBottom && rows.isNotEmpty()) scrollToBottom()
+        rows = ChatRows.build(messages, deliveries, siteZone)
     }
 
-    private fun isAtBottom(): Boolean {
-        val lm = binding.messageRecycler.layoutManager as? LinearLayoutManager ?: return true
-        if (adapter.itemCount == 0) return true
-        return lm.findLastCompletelyVisibleItemPosition() >= adapter.itemCount - 2
-    }
-
+    /**
+     * The thread screen owns the scroll position, so this only makes sure
+     * the newest message is the one the operator sees.
+     */
     private fun scrollToBottom() {
-        if (adapter.itemCount == 0) return
-        binding.messageRecycler.scrollToPosition(adapter.itemCount - 1)
-        binding.scrollBottomFab.hide()
-    }
-
-    private fun showSnack(message: String) {
-        Snackbar.make(binding.chatRoot, message, Snackbar.LENGTH_SHORT)
-            .setAnchorView(binding.composer)
-            .show()
-    }
-
-    private fun showSnackLong(message: String) {
-        Snackbar.make(binding.chatRoot, message, Snackbar.LENGTH_LONG)
-            .setAnchorView(binding.composer)
-            .show()
-    }
-
-    private fun updateSubtitle() {
-        supportActionBar?.subtitle = getString(
-            if (memberReplyEnabled) R.string.chat_replies_on else R.string.chat_replies_off
-        )
+        wasAtBottom = true
     }
 
     private fun hideKeyboard() {
-        val imm = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-        imm?.hideSoftInputFromWindow(binding.replyInput.windowToken, 0)
+        // The Compose composer hides the keyboard itself.
+    }
+
+    private fun showSnack(message: String) {
+        notice = message
+    }
+
+    private fun showSnackLong(message: String) {
+        notice = message
     }
 
     // -------------------------------------------------------------- outbox
@@ -403,17 +412,16 @@ class ChatActivity : AppCompatActivity() {
         }
 
         val drop = SendQueue.lastDrop(this)
-        binding.outboxBar.isVisible = pending.isNotEmpty() || drop != null
-        binding.outboxText.text = when {
+        outboxText = when {
             pending.isNotEmpty() -> if (pending.size == 1) {
                 getString(R.string.outbox_queued_one)
             } else {
                 getString(R.string.outbox_queued_many, pending.size)
             }
             drop != null -> getString(R.string.outbox_dropped, preview(drop.message))
-            else -> ""
+            else -> null
         }
-        binding.outboxAction.text = getString(
+        outboxActionLabel = getString(
             if (pending.isNotEmpty()) R.string.outbox_review else R.string.outbox_dismiss_notice
         )
         render()
@@ -560,7 +568,7 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun renderTyping(active: Boolean) {
-        binding.typingIndicator.isVisible = active
+        typing = active
     }
 
     /**
@@ -605,10 +613,6 @@ class ChatActivity : AppCompatActivity() {
             try {
                 val (older, more) = b.history(conversationId, oldestId, 50)
                 if (older.isNotEmpty()) {
-                    val lm = binding.messageRecycler.layoutManager as? LinearLayoutManager
-                    val pos = lm?.findFirstVisibleItemPosition() ?: 0
-                    val offset = lm?.findViewByPosition(pos)?.top ?: 0
-
                     val merged = (older + messages).distinctBy { it.id }.sortedBy { it.id }
                     messages.clear()
                     messages.addAll(merged)
@@ -616,7 +620,6 @@ class ChatActivity : AppCompatActivity() {
                     hasMore = more
                     wasAtBottom = false
                     render()
-                    binding.messageRecycler.post { lm?.scrollToPositionWithOffset(pos + 1, offset) }
                 } else {
                     hasMore = more
                 }
@@ -628,10 +631,117 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    // ------------------------------------------------- the operator's tools
+
+    /** The bridge for the new operator endpoints (pin, delete, block). */
+    private fun tools(): LiveToolsBridge {
+        val url = intent.getStringExtra("base_url") ?: SecurePrefs.url(this)
+        val token = intent.getStringExtra("token") ?: SecurePrefs.token(this)
+        return LiveToolsBridge(url, token)
+    }
+
+    /** The messages this operator has pinned in this conversation. */
+    private fun loadPinned() {
+        lifecycleScope.launch {
+            try {
+                pinnedIds = tools().pinnedMessages(conversationId).toSet()
+            } catch (_: Exception) {
+                pinnedIds = emptySet()
+            }
+        }
+    }
+
+    /**
+     * Pin or unpin a message.
+     *
+     * A pinned message stays at the top of the thread: it is how the
+     * operator marks the answer everybody should be able to find.
+     */
+    private fun pinMessage(id: Long, pinned: Boolean) {
+        lifecycleScope.launch {
+            val ok = try {
+                tools().messageAction(if (pinned) "pin" else "unpin", id, conversationId)
+            } catch (e: Exception) {
+                showSnack("The message could not be pinned: ${e.message}")
+                return@launch
+            }
+            if (ok) {
+                pinnedIds = if (pinned) pinnedIds + id else pinnedIds - id
+                showSnack(if (pinned) "Pinned." else "Unpinned.")
+            } else {
+                showSnack("The message could not be pinned.")
+            }
+        }
+    }
+
+    /** Delete a message (the server keeps the moderation log). */
+    private fun deleteMessage(id: Long) {
+        lifecycleScope.launch {
+            val ok = try {
+                tools().messageAction("delete", id, conversationId)
+            } catch (e: Exception) {
+                showSnack("The message could not be deleted: ${e.message}")
+                return@launch
+            }
+            if (ok) {
+                messages.removeAll { it.id == id }
+                deliveries.remove(id)
+                render()
+                showSnack("Deleted.")
+            } else {
+                showSnack("The message could not be deleted.")
+            }
+        }
+    }
+
+    /** Copy a message to the clipboard. */
+    private fun copyMessage(id: Long) {
+        val message = messages.firstOrNull { it.id == id } ?: return
+        val clip = getSystemService(CLIPBOARD_SERVICE) as? android.content.ClipboardManager ?: return
+        clip.setPrimaryClip(android.content.ClipData.newPlainText("message", message.message))
+        showSnack("Copied.")
+    }
+
+    /** Let (or stop) the member's own replies. */
+    private fun toggleMemberReplies(enabled: Boolean) {
+        val b = bridge ?: return
+        lifecycleScope.launch {
+            try {
+                val ok = b.setMemberReply(conversationId, enabled)
+                if (ok) {
+                    memberReplyEnabled = enabled
+                    showSnack(if (enabled) "The member can reply now." else "The member cannot reply now.")
+                } else {
+                    showSnack("That could not be changed.")
+                }
+            } catch (e: Exception) {
+                showSnack("That could not be changed: ${e.message}")
+            }
+        }
+    }
+
+    /** Switch the conversation between the operator and the AI. */
+    private fun changeAiMode(mode: String) {
+        val b = bridge ?: return
+        lifecycleScope.launch {
+            try {
+                val ok = b.setMode(conversationId, mode)
+                if (ok) {
+                    aiMode = mode
+                    showSnack("AI mode: $mode")
+                } else {
+                    showSnack("The mode could not be changed.")
+                }
+            } catch (e: Exception) {
+                showSnack("The mode could not be changed: ${e.message}")
+            }
+        }
+    }
+
     // ------------------------------------------------------------ sending
 
     private fun sendReply() {
-        val text = binding.replyInput.text.toString().trim()
+        val text = draft.trim()
         val pending = pendingAttachment
         if (text.isEmpty() && pending == null) return
         if (pending != null && pending.length() > MAX_ATTACHMENT_BYTES) {
@@ -682,7 +792,7 @@ class ChatActivity : AppCompatActivity() {
         // [attemptKeys] / the outbox entry.
         val idempotencyKey = SendReconcile.newKey()
 
-        binding.replyInput.setText("")
+        draft = ""
         prefs.edit().remove("draft_$conversationId").apply()
         pendingAttachment = null
         hideKeyboard()
@@ -1095,8 +1205,7 @@ class ChatActivity : AppCompatActivity() {
                     if (ok) {
                         memberReplyEnabled = target
                         intent.putExtra("member_reply_enabled", target)
-                        updateSubtitle()
-                    }
+                                    }
                     showSnack(
                         when {
                             !ok -> "Could not update the reply toggle"

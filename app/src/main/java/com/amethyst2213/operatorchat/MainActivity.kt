@@ -9,67 +9,68 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.view.Menu
-import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
-import android.content.res.ColorStateList
 import android.widget.ArrayAdapter
-import android.widget.Button
 import android.widget.EditText
-import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.ListView
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.text.Editable
 import android.text.TextWatcher
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.Toolbar
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.core.view.isVisible
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.recyclerview.widget.DiffUtil
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.ListAdapter
-import androidx.recyclerview.widget.RecyclerView
-import java.util.TimeZone
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.amethyst2213.operatorchat.ui.screens.InboxScreen
+import com.amethyst2213.operatorchat.ui.screens.LoginScreen
+import com.amethyst2213.operatorchat.ui.theme.OperatorTheme
 
 /**
- * Login + users list. Shows only users with unread member messages (favourites
- * pinned to the top), with a menu to view all users. The inbox is owned by a
- * ViewModel (StateFlow) so rotation never restarts work, and an optional
+ * Login + the operator inbox.
+ *
+ * The screen is Compose now. The business logic did not change: the inbox is
+ * owned by a ViewModel (a StateFlow, so a rotation never restarts work), the
+ * poll service keeps the badge fresh in the background, and an optional
  * biometric lock protects the operator view.
  */
 class MainActivity : AppCompatActivity() {
-
-    private lateinit var urlInput: EditText
-    private lateinit var tokenInput: EditText
-    private lateinit var connectButton: Button
-    private lateinit var loginContainer: LinearLayout
-    private lateinit var statusLabel: TextView
-    private lateinit var inboxRecycler: RecyclerView
-    private lateinit var emptyLabel: TextView
-    private lateinit var loadingBar: ProgressBar
-    private lateinit var searchInput: EditText
-    private lateinit var loadMoreButton: Button
 
     private val vm: MainViewModel by viewModels<MainViewModel>()
 
     private var refreshJob: Job? = null
     private var searchJob: Job? = null
     private var resumed = false
+
+    /** The address and the token, kept here so the screens can edit them. */
+    private var serverUrl by mutableStateOf("")
+    private var operatorToken by mutableStateOf("")
+
+    /** A message for the operator (the update check, a failed search). */
+    private var statusMessage by mutableStateOf<String?>(null)
+
+    /** The next scheduled show, shown as a badge in the inbox header. */
+    private var nextShowTitle by mutableStateOf<String?>(null)
+
+    /** Is a broadcast running right now? */
+    private var liveNow by mutableStateOf(false)
+
+    /** The search text (held here so the field does not clear on recomposition). */
+    private var searchQuery by mutableStateOf("")
 
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -84,85 +85,75 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        val toolbar = findViewById<Toolbar>(R.id.toolbar)
-        setSupportActionBar(toolbar)
-        supportActionBar?.setTitle("Users list")
-        StatusBarToolbar.apply(this, toolbar)
-
-        urlInput = findViewById(R.id.url_input)
-        tokenInput = findViewById(R.id.token_input)
-        connectButton = findViewById(R.id.connect_button)
-        loginContainer = findViewById(R.id.login_container)
-        statusLabel = findViewById(R.id.status_label)
-        inboxRecycler = findViewById(R.id.inbox_recycler)
-        emptyLabel = findViewById(R.id.empty_label)
-        loadingBar = findViewById(R.id.loading_bar)
-        searchInput = findViewById(R.id.search_input)
-        loadMoreButton = findViewById(R.id.load_more_button)
-        loadMoreButton.setOnClickListener { vm.loadMore() }
-
-        inboxRecycler.layoutManager = LinearLayoutManager(this)
-        inboxRecycler.adapter = InboxAdapter { openChat(it) }
-
-        connectButton.setOnClickListener { connect() }
-        searchInput.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                searchJob?.cancel()
-                searchJob = lifecycleScope.launch {
-                    delay(250)
-                    vm.setQuery(searchInput.text.toString().trim())
-                }
-            }
-            override fun afterTextChanged(s: Editable?) = Unit
-        })
-
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
 
         val savedUrl = SecurePrefs.url(this)
         val savedToken = SecurePrefs.token(this)
+        serverUrl = savedUrl
+        operatorToken = savedToken
+
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        ContextCompat.registerReceiver(
+            this,
+            chatEventReceiver,
+            IntentFilter(ChatPollService.ACTION_CHAT_EVENT),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+
+        setContent {
+            OperatorTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
+                val connected = vm.bridge != null
+
+                if (!connected) {
+                    LoginScreen(
+                        initialUrl = serverUrl,
+                        initialToken = operatorToken,
+                        busy = state.loading,
+                        error = statusMessage ?: state.error,
+                        onConnect = { url, token ->
+                            statusMessage = null
+                            connect(url, token)
+                        },
+                    )
+                } else {
+                    InboxScreen(
+                        conversations = state.items,
+                        loading = state.loading,
+                        refreshing = false,
+                        query = searchQuery,
+                        error = statusMessage ?: state.error,
+                        liveBadge = liveNow,
+                        nextShowTitle = nextShowTitle,
+                        onQueryChange = { query ->
+                            searchQuery = query
+                            searchJob?.cancel()
+                            searchJob = lifecycleScope.launch {
+                                delay(250)
+                                vm.setQuery(query)
+                            }
+                        },
+                        onOpen = { openChat(it) },
+                        onOpenLive = { openLive() },
+                        onOpenSchedule = { openSchedule() },
+                        onOpenSettings = { openSettings() },
+                        onRefresh = { vm.refresh(showLoading = true) },
+                    )
+                }
+            }
+        }
+
         if (savedUrl.isNotEmpty() && savedToken.isNotEmpty()) {
-            urlInput.setText(savedUrl)
-            tokenInput.setText(savedToken)
             // Restore the session behind the biometric lock when it is enabled.
             if (biometricLockEnabled()) {
                 promptBiometric { restoreSession() }
             } else {
                 restoreSession()
             }
-        }
-
-        ContextCompat.registerReceiver(this, chatEventReceiver,
-            IntentFilter(ChatPollService.ACTION_CHAT_EVENT), ContextCompat.RECEIVER_NOT_EXPORTED)
-
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
-                vm.state.collect { render(it) }
-            }
-        }
-    }
-
-    private fun render(state: MainViewModel.InboxState) {
-        val loggedIn = vm.bridge != null
-        loginContainer.visibility = if (loggedIn) View.GONE else View.VISIBLE
-        if (loggedIn) {
-            (inboxRecycler.adapter as? InboxAdapter)?.submitList(state.items)
-            loadMoreButton.visibility = if (state.hasMore) View.VISIBLE else View.GONE
-            emptyLabel.visibility = if (state.items.isEmpty()) View.VISIBLE else View.GONE
-            loadingBar.visibility = if (state.loading) View.VISIBLE else View.GONE
-            statusLabel.text = when {
-                state.loading -> if (vm.allUsersMode) "Loading all users…" else "Loading users…"
-                state.error != null -> state.error!!
-                else -> state.statusLine
-            }
-        } else {
-            (inboxRecycler.adapter as? InboxAdapter)?.submitList(emptyList())
-            statusLabel.text = state.statusLine
         }
     }
 
@@ -184,92 +175,22 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         searchJob?.cancel()
         stopRefreshLoop()
-        try { unregisterReceiver(chatEventReceiver) } catch (_: Exception) {}
+        try {
+            unregisterReceiver(chatEventReceiver)
+        } catch (_: Exception) {
+        }
         super.onDestroy()
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_main, menu)
-        return true
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_all_users -> {
-                vm.setAllUsers(true)
-                supportActionBar?.setTitle("All users")
-                true
-            }
-            R.id.action_unread -> {
-                vm.setAllUsers(false)
-                supportActionBar?.setTitle("Users list")
-                true
-            }
-            R.id.action_new_chat -> {
-                showNewChatDialog()
-                true
-            }
-            R.id.action_settings -> {
-                openSettings()
-                true
-            }
-            R.id.action_update -> {
-                checkForUpdate()
-                true
-            }
-            R.id.action_live -> {
-                val i = Intent(this, LiveActivity::class.java)
-                startActivity(i)
-                true
-            }
-            R.id.action_logout -> {
-                vm.logout()
-                stopRefreshLoop()
-                stopPollService()
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
-        }
-    }
-
-    private fun openSettings() {
-        val url = urlInput.text.toString().trim().trimEnd('/')
-        val i = Intent(this, SettingsActivity::class.java)
-        i.putExtra("base_url", url)
-        startActivity(i)
-    }
-
-    private fun checkForUpdate() {
-        val url = urlInput.text.toString().trim().trimEnd('/')
-        if (url.isEmpty()) {
-            statusLabel.text = "Enter the server URL first."
+    private fun connect(url: String, token: String) {
+        val clean = url.trim().trimEnd('/')
+        if (clean.isEmpty() || token.trim().isEmpty()) {
+            statusMessage = "Server URL and token are required."
             return
         }
-        statusLabel.text = "Checking for updates…"
-        val b = ChatBridge(url, SecurePrefs.token(this))
-        lifecycleScope.launch {
-            val v = b.checkForUpdate()
-            if (v == null) {
-                statusLabel.text = "Could not reach the update server."
-                return@launch
-            }
-            val current = packageManager.getPackageInfo(packageName, 0).versionCode.toLong()
-            if (v.versionCode > current) {
-                Updater.downloadAndInstall(lifecycleScope, this@MainActivity, url, SecurePrefs.token(this@MainActivity), v, statusLabel)
-            } else {
-                statusLabel.text = "You're on the latest version (${v.latestVersion})."
-            }
-        }
-    }
-
-    private fun connect() {
-        val url = urlInput.text.toString().trim().trimEnd('/')
-        val token = tokenInput.text.toString().trim()
-        if (url.isEmpty() || token.isEmpty()) {
-            statusLabel.text = "Server URL and token are required."
-            return
-        }
-        vm.connect(url, token)
+        serverUrl = clean
+        operatorToken = token.trim()
+        vm.connect(clean, serverToken())
         startPollService()
         startRefreshLoop()
     }
@@ -280,17 +201,21 @@ class MainActivity : AppCompatActivity() {
         startRefreshLoop()
     }
 
+    private fun serverToken(): String = SecurePrefs.token(this)
+
     private fun startPollService() {
         try {
             val si = Intent(this, ChatPollService::class.java)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(si) else startService(si)
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     private fun stopPollService() {
         try {
             stopService(Intent(this, ChatPollService::class.java))
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     /** Gentle background badge refresh, only while the screen is visible. */
@@ -311,7 +236,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openChat(c: ChatBridge.Conversation) {
         val i = Intent(this, ChatActivity::class.java)
-        i.putExtra("base_url", urlInput.text.toString().trim().trimEnd('/'))
+        i.putExtra("base_url", serverUrl)
         i.putExtra("conversation_id", c.id)
         i.putExtra("username", c.username.ifEmpty { c.userEmail })
         i.putExtra("ai_mode", c.aiMode)
@@ -319,86 +244,18 @@ class MainActivity : AppCompatActivity() {
         startActivity(i)
     }
 
-    /** Open a conversation by id (used after starting a chat with a user). */
-    private fun openChatById(conversationId: Long, username: String) {
-        val i = Intent(this, ChatActivity::class.java)
-        i.putExtra("base_url", urlInput.text.toString().trim().trimEnd('/'))
-        i.putExtra("conversation_id", conversationId)
-        i.putExtra("username", username)
-        startActivity(i)
+    private fun openLive() {
+        startActivity(Intent(this, LiveActivity::class.java))
     }
 
-    /** Search users and start a new conversation with any of them. */
-    private fun showNewChatDialog() {
-        val b = vm.bridge ?: run { statusLabel.text = "Connect first."; return }
+    private fun openSchedule() {
+        startActivity(Intent(this, ScheduleActivity::class.java))
+    }
 
-        val search = EditText(this).apply {
-            hint = "Search users by email…"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-        }
-        val list = ListView(this)
-        val pad = (12 * resources.displayMetrics.density).toInt()
-        search.setPadding(pad, pad, pad, pad)
-        list.setPadding(0, 0, 0, 0)
-        val results = mutableListOf<ChatBridge.UserResult>()
-        val adapter = object : ArrayAdapter<ChatBridge.UserResult>(this, android.R.layout.simple_list_item_2, android.R.id.text1, results) {
-            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                val v = super.getView(position, convertView, parent)
-                val u = getItem(position) ?: return v
-                val t1 = v.findViewById<TextView>(android.R.id.text1)
-                val t2 = v.findViewById<TextView>(android.R.id.text2)
-                t1?.text = u.username
-                t2?.text = u.email + (if (u.canChat) " · chat enabled" else " · no chat plan")
-                return v
-            }
-        }
-        list.adapter = adapter
-
-        var dialogSearchJob: Job? = null
-        search.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                dialogSearchJob?.cancel()
-                val q = s?.toString()?.trim().orEmpty()
-                if (q.length < 2) { results.clear(); adapter.notifyDataSetChanged(); return }
-                dialogSearchJob = lifecycleScope.launch {
-                    try {
-                        val found = b.searchUsers(q)
-                        results.clear()
-                        results.addAll(found)
-                        adapter.notifyDataSetChanged()
-                    } catch (_: Exception) {
-                        statusLabel.text = "User search failed — check connection."
-                    }
-                }
-            }
-            override fun afterTextChanged(s: Editable?) = Unit
-        })
-
-        list.setOnItemClickListener { _, _, position, _ ->
-            val user = adapter.getItem(position) ?: return@setOnItemClickListener
-            statusLabel.text = "Opening chat with ${user.username}…"
-            lifecycleScope.launch {
-                try {
-                    val (cid, username) = b.startConversation(user.id)
-                    if (cid > 0) openChatById(cid, username.ifEmpty { user.username })
-                } catch (e: Exception) {
-                    statusLabel.text = "Could not start chat: ${e.message}"
-                }
-            }
-        }
-
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(search)
-            addView(list, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Message any user")
-            .setView(content)
-            .setNegativeButton("Close", null)
-            .create()
-            .show()
+    private fun openSettings() {
+        val i = Intent(this, SettingsActivity::class.java)
+        i.putExtra("base_url", serverUrl)
+        startActivity(i)
     }
 
     // ------------------------------------------------------------- biometric
@@ -437,7 +294,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Numeric passcode gate used when no biometrics are enrolled. */
     private fun promptPasscode(onAuthenticated: () -> Unit) {
-        val input = android.widget.EditText(this).apply {
+        val input = EditText(this).apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER or
                 android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD
             hint = if (Passcode.isSet(this@MainActivity)) "Enter your passcode" else "Create a 4-32 digit passcode"
@@ -492,8 +349,8 @@ class MainActivity : AppCompatActivity() {
     /**
      * Wipes the passcode AND the saved server URL + operator token, then sends
      * the operator to Settings to enter them again. Clearing only the passcode
-     * would make the lock pointless: anyone could tap "forgot" and walk into
-     * the inbox, so the credentials the lock protects go with it.
+     * would make the lock pointless: anyone could tap "forgot" and walk into the
+     * inbox, so the credentials the lock protects go with it.
      */
     private fun confirmPasscodeReset() {
         AlertDialog.Builder(this)
@@ -513,110 +370,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toast(msg: String) {
-        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show()
-    }
-
-    // ---------------------------------------------------------------- adapter
-    private class Holder(v: View) : RecyclerView.ViewHolder(v) {
-        val title: TextView = v.findViewById(R.id.row_title)
-        val preview: TextView = v.findViewById(R.id.row_preview)
-        val badge: TextView = v.findViewById(R.id.row_badge)
-        val avatar: TextView = v.findViewById(R.id.row_avatar)
-        val avatarBg: ImageView = v.findViewById(R.id.row_avatar_bg)
-        val time: TextView = v.findViewById(R.id.row_time)
-    }
-
-    private inner class InboxAdapter(
-        private val onClick: (ChatBridge.Conversation) -> Unit,
-    ) : ListAdapter<ChatBridge.Conversation, Holder>(INBOX_DIFF) {
-
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
-            Holder(layoutInflater.inflate(R.layout.row_user, parent, false))
-
-        override fun onBindViewHolder(h: Holder, position: Int) {
-            val c = getItem(position)
-            val name = c.username.ifEmpty { c.userEmail }
-
-            h.title.text = name
-            h.avatar.text = name.trim().firstOrNull()?.uppercase() ?: "?"
-            // A stable colour per member, so the tiles read as distinct without
-            // any extra data coming from the server.
-            h.avatarBg.imageTintList = android.content.res.ColorStateList.valueOf(avatarColor(c.id))
-            h.time.text = briefTime(c.lastMessageAt)
-            h.time.visibility = if (c.lastMessageAt.isBlank()) View.GONE else View.VISIBLE
-
-            val unread = c.unreadReplyable
-            h.badge.isVisible = unread > 0
-            if (unread > 0) h.badge.text = if (unread > 99) "99+" else unread.toString()
-            h.badge.contentDescription = unread.toString() + " unread"
-
-            val last = when {
-                c.lastMessage.isNotBlank() -> c.lastMessage
-                else -> "(no messages)"
-            }
-            h.preview.text = (if (c.lastSender == "user") "Member: " else "You: ") + last
-            h.preview.isVisible = vm.allUsersMode
-            h.title.setTextColor(
-                if (unread > 0) {
-                    ContextCompat.getColor(this@MainActivity, R.color.text)
-                } else {
-                    ContextCompat.getColor(this@MainActivity, R.color.text_secondary)
-                }
-            )
-            h.itemView.setOnClickListener { onClick(c) }
+        runOnUiThread {
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
         }
-
-        /** A stable accent for a conversation id, from the app's own palette. */
-        private fun avatarColor(id: Long): Int {
-            val palette = intArrayOf(
-                R.color.avatar_1, R.color.avatar_2, R.color.avatar_3,
-                R.color.avatar_4, R.color.avatar_5,
-            )
-            return ContextCompat.getColor(
-                this@MainActivity,
-                palette[((id % palette.size.toLong()).toInt() + palette.size) % palette.size],
-            )
-        }
-
-        /** "14:32" for today, "Tue" inside the last week, else "12 Mar". */
-        private fun briefTime(raw: String): String {
-            val tzId = getSharedPreferences("operator_chat", MODE_PRIVATE)
-                .getString("site_timezone", ChatRows.DEFAULT_ZONE) ?: ChatRows.DEFAULT_ZONE
-            val tz = TimeZone.getTimeZone(tzId)
-            val epoch = ChatRows.epochMillis(raw, tzId)
-            if (epoch <= 0) return ""
-
-            val then = java.util.Calendar.getInstance(tz).apply { timeInMillis = epoch }
-            val now = java.util.Calendar.getInstance(tz)
-            val sameDay = then.get(java.util.Calendar.YEAR) == now.get(java.util.Calendar.YEAR) &&
-                then.get(java.util.Calendar.DAY_OF_YEAR) == now.get(java.util.Calendar.DAY_OF_YEAR)
-            val withinWeek = now.timeInMillis - epoch < 6L * 24 * 60 * 60 * 1000
-
-            val pattern = when {
-                sameDay -> "HH:mm"
-                withinWeek -> "EEE"
-                else -> "d MMM"
-            }
-            return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
-                .apply { timeZone = tz }
-                .format(java.util.Date(epoch))
-        }
-    }
-
-    private object INBOX_DIFF : DiffUtil.ItemCallback<ChatBridge.Conversation>() {
-        override fun areItemsTheSame(a: ChatBridge.Conversation, b: ChatBridge.Conversation): Boolean =
-            a.id == b.id
-
-        override fun areContentsTheSame(a: ChatBridge.Conversation, b: ChatBridge.Conversation): Boolean =
-            a.id == b.id
-                && a.username == b.username
-                && a.userEmail == b.userEmail
-                && a.lastMessage == b.lastMessage
-                && a.lastSender == b.lastSender
-                && a.lastMessageAt == b.lastMessageAt
-                && a.unreadReplyable == b.unreadReplyable
-                && a.memberReplyEnabled == b.memberReplyEnabled
-                && a.canChat == b.canChat
-                && a.favorite == b.favorite
     }
 }
