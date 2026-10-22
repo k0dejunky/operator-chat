@@ -54,15 +54,18 @@ class UpdateCheckTest {
         }
     }
 
+    /** A version code that is always newer than the installed build. */
+    private val newer = 9_000_000L
+
     @Test
     fun `a newer build is found without a token`() {
-        serveManifest("3.1", 63)
+        serveManifest("3.1", newer)
         val offer = runBlocking {
             Updater.checkLatest(context, server.url("/gallery").toString())
         }
         assertNotNull("the published build was not found", offer)
         assertEquals("3.1", offer!!.version)
-        assertEquals(63L, offer.versionCode)
+        assertEquals(newer, offer.versionCode)
     }
 
     @Test
