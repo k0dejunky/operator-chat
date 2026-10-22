@@ -88,7 +88,7 @@ object ImagePrep {
                     ExifInterface.TAG_ORIENTATION,
                     ExifInterface.ORIENTATION_NORMAL
                 )
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 ExifInterface.ORIENTATION_NORMAL
             }
 
@@ -116,7 +116,7 @@ object ImagePrep {
                 scaled.recycle()
             }
             ok && dest.length() > 0
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             dest.delete()
             false
         }
@@ -142,7 +142,7 @@ object ImagePrep {
                 FileOutputStream(dest).use { out -> ins.copyTo(out, 128 * 1024) }
             } ?: return null
             dest
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             dest.delete()
             null
         }

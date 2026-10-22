@@ -63,6 +63,12 @@ class LiveActivity : AppCompatActivity() {
     private var chatDraft by mutableStateOf("")
     private var error by mutableStateOf<String?>(null)
 
+    /** Is the broadcast also being saved to an MP4 on the device? */
+    private var recording by mutableStateOf(false)
+
+    /** The file the recording is written to. */
+    private var recordFile by mutableStateOf<String?>(null)
+
     private var chatJob: Job? = null
     private var stateJob: Job? = null
     private var statsJob: Job? = null
@@ -75,6 +81,9 @@ class LiveActivity : AppCompatActivity() {
         val camera = granted[Manifest.permission.CAMERA] == true
         val mic = granted[Manifest.permission.RECORD_AUDIO] == true
         if (camera) {
+            // The service may only use the camera type once the permission
+            // is actually held; before that it runs with data-sync alone.
+            LiveBroadcastService.current()?.promoteWithCamera()
             prepareCamera()
             if (!mic) {
                 error = "No microphone permission: the broadcast will have no sound."
@@ -106,6 +115,9 @@ class LiveActivity : AppCompatActivity() {
                     onFlipCamera = { session?.flipCamera() },
                     onToggleMic = { toggleMic() },
                     onTogglePause = { togglePause() },
+                    onToggleRecord = { toggleRecording() },
+                    recording = recording,
+                    recordFile = recordFile,
                     onChatDraftChange = { chatDraft = it },
                     onSendChat = { sendLiveChat() },
                     onSurfaceReady = { surface, width, height -> attachSurface(surface, width, height) },
@@ -122,9 +134,11 @@ class LiveActivity : AppCompatActivity() {
         // it and sends commands.
         stateJob?.cancel()
         stateJob = lifecycleScope.launch {
-            LiveBroadcastService.current()?.state?.collect { live ->
-                state = live
-            }
+            // The service is created by the system AFTER this activity's
+            // onStart, so the state used to be missing on the first visit
+            // and "Go live" did nothing. Wait for it instead.
+            val service = LiveBroadcastService.awaitInstance() ?: return@launch
+            service.state.collect { live -> state = live }
         }
     }
 
@@ -132,6 +146,37 @@ class LiveActivity : AppCompatActivity() {
         super.onResume()
         if (hasPermissions()) prepareCamera()
         startStats()
+    }
+
+    /**
+     * Prepare the camera and the encoder.
+     *
+     * The service owns the encoder, so this waits for the service to exist
+     * and then asks it for a session. It used to give up when the service
+     * was not there yet - which was always, on the first visit.
+     */
+    private fun prepareCameraAsync() {
+        lifecycleScope.launch {
+            val service = LiveBroadcastService.awaitInstance() ?: return@launch
+            if (session == null) {
+                val created = service.createSession(object : BroadcastSession.Listener {
+                    override fun onState(newState: BroadcastState) {
+                        runOnUiThread { state = newState }
+                    }
+
+                    override fun onLog(message: String) {
+                        runOnUiThread { error = message }
+                    }
+                })
+                session = created
+                val landscape = resources.configuration.orientation ==
+                    android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                // The camera open + two MediaCodecs take 100-500ms: keep them
+                // off the UI thread or the screen freezes.
+                withContext(Dispatchers.Default) { created.prepare(landscape) }
+            }
+            session?.attachPreviewIfReady()
+        }
     }
 
     override fun onStop() {
@@ -142,9 +187,17 @@ class LiveActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        // The broadcast keeps running: the service owns it now. The Activity
-        // only lets go of the preview surface.
-        session?.detachPreview()
+        // A live broadcast keeps running: the service owns it now. But when
+        // nothing is being broadcast the service is stopped, so the camera
+        // and the microphone do not stay open in the background.
+        val live = state is BroadcastState.Live || state is BroadcastState.Connecting
+        if (!live) {
+            session?.detachPreview()
+            LiveBroadcastService.stop(this)
+            session = null
+        } else {
+            session?.detachPreview()
+        }
         super.onDestroy()
     }
 
@@ -153,28 +206,11 @@ class LiveActivity : AppCompatActivity() {
 
     /** Create (once) the camera + encoder and attach the preview surface. */
     private fun prepareCamera() {
-        if (session != null) return
-        val service = LiveBroadcastService.current() ?: run {
-            LiveBroadcastService.start(this)
+        if (session != null) {
+            session?.attachPreviewIfReady()
             return
         }
-        val created = service.createSession(object : BroadcastSession.Listener {
-            override fun onState(newState: BroadcastState) {
-                runOnUiThread { state = newState }
-            }
-
-            override fun onLog(message: String) {
-                runOnUiThread { error = message }
-            }
-        })
-        session = created
-        val landscape = resources.configuration.orientation ==
-            android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        // The camera open + two MediaCodecs take 100-500ms: keep them off the
-        // UI thread or the screen freezes when the operator presses Go Live.
-        lifecycleScope.launch(Dispatchers.Default) {
-            created.prepare(landscape)
-        }
+        prepareCameraAsync()
     }
 
     private fun attachSurface(surface: SurfaceTexture, width: Int, height: Int) {
@@ -199,6 +235,29 @@ class LiveActivity : AppCompatActivity() {
         state = BroadcastState.Preparing
 
         lifecycleScope.launch {
+            // The encoder may not be there yet: without it the publish was
+            // a silent no-op.
+            val service = LiveBroadcastService.awaitInstance()
+            if (service == null) {
+                state = BroadcastState.Failed("The broadcast service did not start.")
+                return@launch
+            }
+            if (session == null) {
+                val created = service.createSession(object : BroadcastSession.Listener {
+                    override fun onState(newState: BroadcastState) {
+                        runOnUiThread { state = newState }
+                    }
+
+                    override fun onLog(message: String) {
+                        runOnUiThread { error = message }
+                    }
+                })
+                session = created
+                val landscape = resources.configuration.orientation ==
+                    android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                withContext(Dispatchers.Default) { created.prepare(landscape) }
+            }
+
             val started = withContext(Dispatchers.IO) { startLiveSession(base, token) }
             if (started == null) {
                 state = BroadcastState.Failed("Could not start the live session.")
@@ -207,8 +266,40 @@ class LiveActivity : AppCompatActivity() {
             rtmpUrl = started.first
             streamKey = started.second
             startLiveChat()
+            // Keep the CPU awake: a sleeping screen throttles the encoder
+            // and the stream dies half way through.
+            service.acquireWakeLock()
             session?.start(started.first)
         }
+    }
+
+    /**
+     * Save the broadcast to an MP4 on the device.
+     *
+     * The server records the stream as well, but that copy is on the box -
+     * this one is the operator's own.
+     */
+    private fun toggleRecording() {
+        val current = session
+        if (current == null) {
+            error = "The camera is not ready yet."
+            return
+        }
+        if (recording) {
+            current.stopRecording()
+            recording = false
+            return
+        }
+        val dir = getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES) ?: filesDir
+        val name = "live-" + java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date()) + ".mp4"
+        val file = current.startRecording(dir, name)
+        if (file == null) {
+            error = "The recording could not be started."
+            return
+        }
+        recording = true
+        recordFile = file.name
     }
 
     private fun stopBroadcast() {
@@ -229,7 +320,13 @@ class LiveActivity : AppCompatActivity() {
         streamKey = ""
         micMuted = false
         paused = false
+        recording = false
+        recordFile = null
         stopLiveChat()
+        // The service owns the camera and the encoders: it has to go, or the
+        // camera and the microphone stay open with the screen long closed.
+        LiveBroadcastService.stop(this)
+        session = null
         state = BroadcastState.Stopped("Stopped")
     }
 

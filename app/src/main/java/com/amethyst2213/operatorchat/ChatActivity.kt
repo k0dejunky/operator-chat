@@ -90,6 +90,15 @@ class ChatActivity : AppCompatActivity() {
 
     /** The outbox strip: the queued replies, or the last rejected one. */
     private var outboxText by mutableStateOf<String?>(null)
+
+    /**
+     * How many replies are waiting in the outbox.
+     *
+     * It used to be read out of the queue on every recomposition - which
+     * happens on every keystroke, because the draft is Compose state. The
+     * count is refreshed when the queue is.
+     */
+    private var queuedCount by mutableStateOf(0)
     private var outboxActionLabel by mutableStateOf("")
 
     /** A message for the operator (a failed send, a copied row). */
@@ -152,7 +161,7 @@ class ChatActivity : AppCompatActivity() {
 
     /** Zone the server stamps its timestamps in (Settings > timezone). */
     private val siteZone: String
-        get() = prefs.getString("site_timezone", ChatRows.DEFAULT_ZONE) ?: ChatRows.DEFAULT_ZONE
+        get() = SiteZone.read(this)
 
     private val pickAttachment =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -232,7 +241,7 @@ class ChatActivity : AppCompatActivity() {
                     rows = rows,
                     draft = draft,
                     sending = false,
-                    queued = SendQueue.pendingFor(this@ChatActivity, conversationId).size,
+                    queued = queuedCount,
                     typing = typing,
                     canReply = true,
                     memberReplyEnabled = memberReplyEnabled,
@@ -248,6 +257,7 @@ class ChatActivity : AppCompatActivity() {
                         searchOpen = !searchOpen
                         if (!searchOpen) searchQuery = ""
                     },
+                    onOpenSettings = { openChatSettings() },
                     onSearchQueryChange = { searchQuery = it },
                     onPin = { id -> pinMessage(id, true) },
                     onUnpin = { id -> pinMessage(id, false) },
@@ -300,23 +310,16 @@ class ChatActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    override fun onCreateOptionsMenu(menu: android.view.Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_chat, menu)
-        return true
-    }
-
-    override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
-        return when (item.itemId) {
-            android.R.id.home -> {
-                finish()
-                true
-            }
-            R.id.action_chat_settings -> {
-                showChatSettings()
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
-        }
+    /**
+     * The chat settings.
+     *
+     * This used to live in the options menu, but the theme has no action bar
+     * and the menu never inflated - so the favourites, the chat mode, the
+     * member replies and the notification tone were all unreachable. The
+     * thread screen has its own button now.
+     */
+    private fun openChatSettings() {
+        showChatSettings()
     }
 
     // ------------------------------------------------------------ rendering
@@ -410,6 +413,8 @@ class ChatActivity : AppCompatActivity() {
                 mediaExpired = false,
             )
         }
+
+        queuedCount = pending.size
 
         val drop = SendQueue.lastDrop(this)
         outboxText = when {
@@ -823,6 +828,7 @@ class ChatActivity : AppCompatActivity() {
         scrollToBottom()
 
         lifecycleScope.launch {
+            try {
             when (
                 val result = b.reply(
                     conversationId, text, pending, idempotencyKey,
@@ -876,6 +882,13 @@ class ChatActivity : AppCompatActivity() {
                     render()
                     showSnackLong("Not sent — queued and will be delivered automatically.")
                 }
+            }
+            } catch (e: Exception) {
+                // A failure here must never take the app down: the reply is
+                // left in the queue and the operator is told.
+                deliveries[placeholderId] = Delivery.QUEUED
+                render()
+                showSnackLong("The reply could not be sent: ${e.message ?: "unknown error"}")
             }
         }
     }
@@ -982,6 +995,7 @@ class ChatActivity : AppCompatActivity() {
             attemptKeys[m.id] = it
         }
         lifecycleScope.launch {
+            try {
             when (
                 val result = bridge?.reply(conversationId, m.message, null, key)
                     ?: ChatBridge.ReplyResult.Failed("Not connected")
@@ -1005,6 +1019,11 @@ class ChatActivity : AppCompatActivity() {
                     render()
                     showSnackLong("Still can't reach the server — left in the queue.")
                 }
+            }
+            } catch (e: Exception) {
+                deliveries[m.id] = Delivery.QUEUED
+                render()
+                showSnackLong("The reply could not be sent: ${e.message ?: "unknown error"}")
             }
         }
     }
@@ -1201,7 +1220,11 @@ class ChatActivity : AppCompatActivity() {
             ) {
                 val target = !memberReplyEnabled
                 lifecycleScope.launch {
-                    val ok = b.setMemberReply(conversationId, target)
+                    val ok = try {
+                        b.setMemberReply(conversationId, target)
+                    } catch (_: Exception) {
+                        false
+                    }
                     if (ok) {
                         memberReplyEnabled = target
                         intent.putExtra("member_reply_enabled", target)
@@ -1244,7 +1267,11 @@ class ChatActivity : AppCompatActivity() {
             .setSingleChoiceItems(labels, checked) { dialog, which ->
                 val mode = modes[which]
                 lifecycleScope.launch {
-                    val ok = b.setMode(conversationId, mode)
+                    val ok = try {
+                        b.setMode(conversationId, mode)
+                    } catch (_: Exception) {
+                        false
+                    }
                     showSnack(if (ok) "Mode set to ${labels[which]}" else "Mode update failed")
                     if (ok) intent.putExtra("ai_mode", mode)
                 }

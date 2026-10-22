@@ -63,11 +63,30 @@ class ScheduleActivity : AppCompatActivity() {
     }
 
     /** The site's timezone, and the next whole hour, as the default start. */
-    private fun defaultStart(): String {
-        val zone = siteTimezone
-        val now = java.time.ZonedDateTime.now(java.time.ZoneId.of(zone))
-        val start = now.plusHours(1).withMinute(0).withSecond(0).withNano(0)
-        return start.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    /** The default start time for a new show, in the site's timezone. */
+    private fun defaultStart(): String = defaultStart(siteTimezone)
+
+    companion object {
+        /**
+         * The default start time for a new show.
+         *
+         * ZoneId.of() throws for an unknown or empty zone, and the old code
+         * ran it during the composition - so a bad value from the server
+         * would take the whole screen down. UTC is the fallback.
+         */
+        fun defaultStart(
+            zone: String,
+            now: java.time.ZonedDateTime = java.time.ZonedDateTime.now(),
+        ): String {
+            val z = runCatching { java.time.ZoneId.of(zone) }
+                .getOrElse { java.time.ZoneId.of("UTC") }
+            val start = now.withZoneSameInstant(z)
+                .plusHours(1)
+                .withMinute(0)
+                .withSecond(0)
+                .withNano(0)
+            return start.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+        }
     }
 
     private fun load(tools: LiveToolsBridge) {

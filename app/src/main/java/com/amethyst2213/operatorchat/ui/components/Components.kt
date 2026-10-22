@@ -7,6 +7,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,7 +38,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.amethyst2213.operatorchat.UpdateOffer
+import com.amethyst2213.operatorchat.UpdatePhase
 import com.amethyst2213.operatorchat.ui.theme.Palette
 
 /**
@@ -366,4 +370,57 @@ fun avatarColorFor(seed: String): Color {
     )
     val hash = seed.fold(0) { acc, c -> acc * 31 + c.code }
     return colors[Math.abs(hash) % colors.size]
+}
+
+/**
+ * The "a new version is available" strip.
+ *
+ * It is a strip and not a dialog on purpose: a dialog would interrupt a live
+ * broadcast, and the operator would have to dismiss it every single time the
+ * app started.
+ */
+@Composable
+fun UpdateBanner(
+    update: UpdateOffer,
+    onInstall: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val failed = update.phase == UpdatePhase.FAILED
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                if (failed) Palette.Danger.copy(alpha = 0.14f) else Palette.AmethystContainer,
+                RoundedCornerShape(12.dp),
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = update.headline,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (failed) Palette.Danger else Palette.AmethystLight,
+            )
+            if (update.notes.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = update.notes,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Palette.TextSecondary,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        if (update.phase == UpdatePhase.AVAILABLE) {
+            StatusPill(
+                text = "Install",
+                background = Palette.Amethyst,
+                foreground = Palette.White,
+                modifier = Modifier.clickable { onInstall() },
+            )
+        }
+    }
 }

@@ -38,6 +38,9 @@ class SettingsActivity : AppCompatActivity() {
     private var status by mutableStateOf<String?>(null)
     private var error by mutableStateOf<String?>(null)
 
+    /** A published build that is newer than the installed one. */
+    private var update by mutableStateOf<UpdateOffer?>(null)
+
     private val ringtoneResult = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -73,6 +76,7 @@ class SettingsActivity : AppCompatActivity() {
                     lastError = prefs.getString("last_error", null),
                     status = status,
                     error = error,
+                    update = update,
                     onServerUrlChange = { serverUrl = it },
                     onTokenChange = { operatorToken = it },
                     onNotificationsChange = { on -> notificationsOn = on; set("notify_enabled", on) },
@@ -84,6 +88,7 @@ class SettingsActivity : AppCompatActivity() {
                     onSaveConnection = { saveConnection() },
                     onPing = { pingServer() },
                     onCheckUpdate = { checkForUpdate() },
+                    onInstallUpdate = { installUpdate() },
                     onDisconnect = { disconnect() },
                 )
             }
@@ -94,8 +99,11 @@ class SettingsActivity : AppCompatActivity() {
         // showed was in a hardcoded zone.
         lifecycleScope.launch {
             siteTimezone = try {
-                LiveToolsBridge(SecurePrefs.url(this@SettingsActivity), SecurePrefs.token(this@SettingsActivity))
+                val zone = LiveToolsBridge(SecurePrefs.url(this@SettingsActivity), SecurePrefs.token(this@SettingsActivity))
                     .siteConfig().siteTimezone
+                // Remember it: the inbox order and every timestamp use it.
+                SiteZone.save(this@SettingsActivity, zone)
+                zone
             } catch (_: Exception) {
                 ChatRows.DEFAULT_ZONE
             }
@@ -165,23 +173,45 @@ class SettingsActivity : AppCompatActivity() {
             error = "Enter the server address first."
             return
         }
-        status = "Checking for updates…"
+        status = "Checking for updates..."
         error = null
         lifecycleScope.launch {
-            val v = ChatBridge(url, operatorToken.trim()).checkForUpdate()
-            if (v == null) {
-                error = "The update server could not be reached."
+            val offer = Updater.checkLatest(this@SettingsActivity, url, operatorToken.trim())
+            if (offer == null) {
+                status = "This is the latest version."
+                error = null
+                return@launch
+            }
+            update = offer
+            status = "Update available: v${offer.version}"
+            installUpdate()
+        }
+    }
+
+    /**
+     * Download the offered build, verify it and hand it to the installer.
+     *
+     * The phase changes arrive on a worker thread, so they are moved onto the
+     * main thread before they touch the Compose state.
+     */
+    private fun installUpdate() {
+        val offer = update ?: return
+        val url = serverUrl.trim().trimEnd('/')
+        if (url.isEmpty()) {
+            error = "Enter the server address first."
+            return
+        }
+        lifecycleScope.launch {
+            val file = Updater.fetchVerifiedApk(this@SettingsActivity, url, offer) { phase ->
+                lifecycleScope.launch { update = offer.copy(phase = phase) }
+            }
+            if (file == null) {
+                error = "The update could not be downloaded or verified."
                 status = null
                 return@launch
             }
-            val current = packageManager.getPackageInfo(packageName, 0).versionCode.toLong()
-            if (v.versionCode > current) {
-                status = "Update available: v${v.latestVersion}"
-                error = null
-                Updater.downloadAndInstall(lifecycleScope, this@SettingsActivity, url, operatorToken.trim(), v, null)
-            } else {
-                status = "This is the latest version (${v.latestVersion})."
-                error = null
+            Updater.install(this@SettingsActivity, file) { phase ->
+                lifecycleScope.launch { update = offer.copy(phase = phase) }
             }
         }
     }

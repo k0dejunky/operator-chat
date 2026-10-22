@@ -3,6 +3,7 @@ package com.amethyst2213.operatorchat.live
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.util.Log
+import java.io.File
 import com.amethyst2213.operatorchat.R
 import com.pedro.common.ConnectChecker
 import com.pedro.encoder.input.sources.audio.MicrophoneSource
@@ -30,6 +31,22 @@ class BroadcastSession(
     private var camera: Camera2Source? = null
     private var microphone: MicrophoneSource? = null
     private var previewSurface: SurfaceTexture? = null
+
+    /**
+     * The preview surface, and its size.
+     *
+     * The surface usually arrives BEFORE the encoder is ready (the camera
+     * takes a moment to open), so it is kept here and attached as soon as
+     * there is a stream to attach it to. Otherwise the preview stayed black
+     * until the operator left and came back.
+     */
+    private var pendingSurface: SurfaceTexture? = null
+    private var pendingWidth = 0
+    private var pendingHeight = 0
+
+    /** True while the broadcast is also written to an MP4 on the device. */
+    @Volatile
+    private var recording = false
 
     /** The bitrate of the broadcast. 800 kbps was visibly blocky. */
     var bitrate: Int = 2_500_000
@@ -77,6 +94,9 @@ class BroadcastSession(
             camera = cameraSource
             microphone = micSource
             stream = rtmp
+            // The surface is usually ready before the camera is; attach it
+            // now that there is an encoder to attach it to.
+            attachPreviewIfReady()
             listener.onState(BroadcastState.Idle)
         } catch (error: Throwable) {
             Log.e(TAG, "the encoder could not be prepared", error)
@@ -120,8 +140,18 @@ class BroadcastSession(
      */
     fun attachPreview(surface: SurfaceTexture, width: Int, height: Int) {
         previewSurface = surface
+        pendingSurface = surface
+        pendingWidth = width
+        pendingHeight = height
+        attachPreviewIfReady()
+    }
+
+    /** Attach the preview, but only when the encoder is there. */
+    fun attachPreviewIfReady() {
+        val surface = pendingSurface ?: return
+        val rtmp = stream ?: return
         try {
-            stream?.startPreview(surface, width, height)
+            rtmp.startPreview(surface, pendingWidth, pendingHeight)
         } catch (error: Throwable) {
             Log.e(TAG, "the preview could not be attached", error)
         }
@@ -173,6 +203,10 @@ class BroadcastSession(
     /** Release the camera, the encoders and the RTMP connection. */
     fun release() {
         try {
+            stream?.stopRecord()
+        } catch (_: Throwable) {
+        }
+        try {
             stream?.stopStream()
         } catch (_: Throwable) {
         }
@@ -184,7 +218,53 @@ class BroadcastSession(
         camera = null
         microphone = null
         previewSurface = null
+        pendingSurface = null
+        recording = false
     }
+
+    // ------------------------------------------------------------- recording
+
+    /**
+     * Save the broadcast to an MP4 on the device, next to the RTMP push.
+     *
+     * The server records the stream too, but that copy lives on the box -
+     * this one is the operator's own.
+     */
+    fun startRecording(dir: File, name: String): File? {
+        val rtmp = stream ?: return null
+        if (recording) return null
+        return try {
+            val file = File(dir, name)
+            rtmp.startRecord(file.absolutePath, object : com.pedro.library.base.recording.RecordController.Listener {
+                override fun onStatusChange(status: com.pedro.library.base.recording.RecordController.Status) {
+                    recording = status != com.pedro.library.base.recording.RecordController.Status.STOPPED
+                }
+
+                override fun onError(e: Exception) {
+                    recording = false
+                }
+            })
+            recording = true
+            file
+        } catch (error: Throwable) {
+            Log.e(TAG, "the recording could not be started", error)
+            recording = false
+            null
+        }
+    }
+
+    /** Stop the recording and keep the broadcast running. */
+    fun stopRecording() {
+        try {
+            stream?.stopRecord()
+        } catch (error: Throwable) {
+            Log.e(TAG, "the recording did not stop cleanly", error)
+        }
+        recording = false
+    }
+
+    /** True while the MP4 is being written. */
+    fun isRecording(): Boolean = recording
 
     private val connectChecker = object : ConnectChecker {
         override fun onConnectionStarted(url: String) {

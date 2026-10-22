@@ -2,6 +2,7 @@ package com.amethyst2213.operatorchat
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -31,6 +32,23 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
 
     private fun authed(): Request.Builder = Request.Builder()
         .header("Authorization", "Bearer $token")
+
+    /**
+     * The URL of a path on the site.
+     *
+     * The base URL is the site's base path (https://host/gallery), so the
+     * path is added to it. A malformed base URL throws here - and every
+     * call is inside a try, because an exception that escapes a coroutine
+     * kills the whole app.
+     */
+    private fun siteUrl(path: String, query: List<Pair<String, String>> = emptyList()): HttpUrl {
+        val base = baseUrl.toHttpUrlOrNull()
+            ?: throw IllegalArgumentException("Invalid server address")
+        val builder = base.newBuilder()
+        path.trim('/').split('/').filter { it.isNotEmpty() }.forEach { builder.addPathSegment(it) }
+        query.forEach { (key, value) -> builder.addQueryParameter(key, value) }
+        return builder.build()
+    }
 
     /**
      * Whether a raw URL (from server data) points at the configured origin.
@@ -191,14 +209,18 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     /** POST /webhooks/chat/start — open (or reuse) a user's conversation. */
     suspend fun startConversation(userId: Long): Pair<Long, String> = withContext(Dispatchers.IO) {
         val payload = JSONObject().put("user_id", userId)
-        val req = authed()
-            .url("$baseUrl/webhooks/chat/start")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-        client.newCall(req).execute().use { resp ->
-            val json = JSONObject(resp.body?.string().orEmpty())
-            if (!json.optBoolean("ok", false)) throw RuntimeException(json.optString("error", "Could not start conversation"))
-            json.optLong("conversation_id", 0) to json.optString("username", "")
+        try {
+            val req = authed()
+                .url(siteUrl("webhooks/chat/start"))
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val json = JSONObject(resp.body?.string().orEmpty())
+                if (!json.optBoolean("ok", false)) throw RuntimeException(json.optString("error", "Could not start conversation"))
+                json.optLong("conversation_id", 0) to json.optString("username", "")
+            }
+        } catch (e: Exception) {
+            throw RuntimeException(e.message ?: "Could not start the conversation", e)
         }
     }
 
@@ -207,11 +229,11 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val payload = JSONObject()
             .put("conversation_id", conversationId)
             .put("enabled", enabled)
-        val req = authed()
-            .url("$baseUrl/webhooks/chat/reply-toggle")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
         try {
+            val req = authed()
+                .url(siteUrl("webhooks/chat/reply-toggle"))
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
             client.newCall(req).execute().use { resp ->
                 JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
             }
@@ -225,12 +247,16 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val payload = JSONObject()
             .put("conversation_id", conversationId)
             .put("ai_mode", mode)
-        val req = authed()
-            .url("$baseUrl/webhooks/chat/mode")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-        client.newCall(req).execute().use { resp ->
-            JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
+        try {
+            val req = authed()
+                .url(siteUrl("webhooks/chat/mode"))
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(req).execute().use { resp ->
+                JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -239,11 +265,11 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         val payload = JSONObject()
             .put("conversation_id", conversationId)
             .put("message_id", messageId)
-        val req = authed()
-            .url("$baseUrl/webhooks/chat/read")
-            .post(payload.toString().toRequestBody("application/json".toMediaType()))
-            .build()
         try {
+            val req = authed()
+                .url(siteUrl("webhooks/chat/read"))
+                .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                .build()
             client.newCall(req).execute().use { resp ->
                 JSONObject(resp.body?.string().orEmpty()).optBoolean("ok", false)
             }
@@ -254,11 +280,11 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
 
     /** GET /webhooks/chat/apk-info — latest app version + live APK sha256. */
     suspend fun checkForUpdate(): AppVersion? = withContext(Dispatchers.IO) {
-        val req = authed()
-            .url("$baseUrl/webhooks/chat/apk-info")
-            .get()
-            .build()
         try {
+            val req = authed()
+                .url(siteUrl("webhooks/chat/apk-info"))
+                .get()
+                .build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@use null
                 val j = JSONObject(resp.body?.string().orEmpty())
@@ -278,7 +304,10 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
 
     /** GET /webhooks/chat/thread?conversation=ID — most recent 50 messages. */
     suspend fun thread(conversationId: Long): List<Message> = withContext(Dispatchers.IO) {
-        val req = authed().url("$baseUrl/webhooks/chat/thread?conversation=$conversationId").get().build()
+        val req = authed()
+            .url(siteUrl("webhooks/chat/thread", listOf("conversation" to conversationId.toString())))
+            .get()
+            .build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}")
             val json = JSONObject(resp.body?.string().orEmpty())
@@ -293,7 +322,11 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
     suspend fun history(conversationId: Long, before: Long, limit: Int = 50): Pair<List<Message>, Boolean> =
         withContext(Dispatchers.IO) {
             val req = authed()
-                .url("$baseUrl/webhooks/chat/history?conversation=$conversationId&before=$before&limit=$limit")
+                .url(siteUrl("webhooks/chat/history", listOf(
+                    "conversation" to conversationId.toString(),
+                    "before" to before.toString(),
+                    "limit" to limit.toString(),
+                )))
                 .get()
                 .build()
             client.newCall(req).execute().use { resp ->
@@ -314,7 +347,10 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      */
     suspend fun streamOnce(conversationId: Long, since: Long): StreamFrame = withContext(Dispatchers.IO) {
         val req = authed()
-            .url("$baseUrl/webhooks/chat/stream?conversation=$conversationId&since=$since")
+            .url(siteUrl("webhooks/chat/stream", listOf(
+                "conversation" to conversationId.toString(),
+                "since" to since.toString(),
+            )))
             .header("Accept", "text/event-stream")
             .get()
             .build()
@@ -348,7 +384,7 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      */
     suspend fun eventsOnce(since: Long): List<ChatEvent> = withContext(Dispatchers.IO) {
         val req = authed()
-            .url("$baseUrl/webhooks/chat/events?since=$since")
+            .url(siteUrl("webhooks/chat/events", listOf("since" to since.toString())))
             .header("Accept", "text/event-stream")
             .get()
             .build()
@@ -410,9 +446,6 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         expiresInMinutes: Int = 0,
         maxViews: Int = 0,
     ): ReplyResult = withContext(Dispatchers.IO) {
-            val reqBuilder = authed().url("$baseUrl/webhooks/chat/reply")
-            if (!idempotencyKey.isNullOrBlank()) reqBuilder.header("Idempotency-Key", idempotencyKey)
-
             val body: RequestBody
             if (attachment != null) {
                 val mediaType = guessMediaType(attachment).toMediaTypeOrNull()
@@ -435,6 +468,11 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
             }
 
             try {
+                // The URL is built INSIDE the try: a malformed base URL
+                // throws, and an exception that escapes a coroutine kills
+                // the app instead of failing the reply.
+                val reqBuilder = authed().url(siteUrl("webhooks/chat/reply"))
+                if (!idempotencyKey.isNullOrBlank()) reqBuilder.header("Idempotency-Key", idempotencyKey)
                 client.newCall(reqBuilder.post(body).build()).execute().use { resp ->
                     val text = resp.body?.string().orEmpty()
                     val json = try { JSONObject(text) } catch (_: JSONException) { JSONObject() }
@@ -510,11 +548,11 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
      */
     suspend fun downloadApk(version: String, dest: File): File? = withContext(Dispatchers.IO) {
         val safe = version.replace(Regex("[^0-9.]"), "")
-        val req = authed()
-            .url("$baseUrl/webhooks/chat/apk?version=$safe")
-            .get()
-            .build()
         try {
+            val req = authed()
+                .url(siteUrl("webhooks/chat/apk", listOf("version" to safe)))
+                .get()
+                .build()
             client.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return@withContext null
                 resp.body?.byteStream()?.use { ins ->

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -96,6 +97,7 @@ fun ThreadScreen(
     onSend: () -> Unit,
     onAttach: () -> Unit,
     onToggleSearch: () -> Unit,
+    onOpenSettings: () -> Unit = {},
     onSearchQueryChange: (String) -> Unit,
     onPin: (Long) -> Unit,
     onUnpin: (Long) -> Unit,
@@ -121,6 +123,13 @@ fun ThreadScreen(
     var atBottom by remember { mutableStateOf(true) }
     LaunchedEffect(listState) {
         snapshotFlowAtBottom(listState, rows.size) { atBottom = it }
+    }
+    // A new message moves the view - but only when the operator is already
+    // at the bottom. Without this the newest reply arrived off-screen.
+    LaunchedEffect(rows.size) {
+        if (atBottom && rows.isNotEmpty()) {
+            listState.animateScrollToItem(rows.size - 1)
+        }
     }
 
     Column(
@@ -164,6 +173,13 @@ fun ThreadScreen(
                         imageVector = Icons.Outlined.Search,
                         contentDescription = if (searchOpen) "Close the search" else "Search this conversation",
                         tint = if (searchOpen) Palette.Amethyst else Palette.TextSecondary,
+                    )
+                }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(
+                        imageVector = Icons.Outlined.Settings,
+                        contentDescription = "Conversation settings",
+                        tint = Palette.TextSecondary,
                     )
                 }
                 IconButton(onClick = { showControls = !showControls }) {

@@ -32,7 +32,15 @@ import kotlin.random.Random
  */
 class ChatPollService : Service() {
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    /**
+     * The scope the polling runs in.
+     *
+     * It is recreated in onStartCommand: onDestroy cancels it, and a scope
+     * that has been cancelled never runs anything again - so a service that
+     * was stopped and started again (which is what the settings screen does
+     * when the connection changes) showed its notification but never polled.
+     */
+    private var scope = CoroutineScope(Dispatchers.IO)
     private var job: Job? = null
 
     /** True when the SSE stream delivered a batch successfully recently. */
@@ -48,6 +56,9 @@ class ChatPollService : Service() {
         val token = SecurePrefs.token(this).trim()
 
         job?.cancel()
+        // A fresh scope for every start: the old one was cancelled with the
+        // service and would silently do nothing.
+        scope = CoroutineScope(Dispatchers.IO)
         if (url.isEmpty() || token.isEmpty()) {
             // No credentials (logged out, or a system restart with cleared
             // prefs): stop the foreground service instead of idling forever

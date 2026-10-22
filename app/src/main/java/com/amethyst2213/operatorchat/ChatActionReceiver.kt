@@ -18,6 +18,16 @@ import java.util.UUID
 class ChatActionReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
+        // A broadcast receiver that throws takes the whole process with it,
+        // and this one runs while the operator is tapping a notification.
+        try {
+            handle(context, intent)
+        } catch (_: Throwable) {
+            // Nothing to do: the action is simply lost.
+        }
+    }
+
+    private fun handle(context: Context, intent: Intent) {
         val conversationId = intent.getLongExtra("conversation_id", 0)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 

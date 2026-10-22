@@ -39,11 +39,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.amethyst2213.operatorchat.UpdateOffer
+import com.amethyst2213.operatorchat.UpdatePhase
 import com.amethyst2213.operatorchat.ui.components.DetailRow
 import com.amethyst2213.operatorchat.ui.components.ErrorBanner
 import com.amethyst2213.operatorchat.ui.components.PrimaryButton
 import com.amethyst2213.operatorchat.ui.components.SecondaryButton
 import com.amethyst2213.operatorchat.ui.components.SectionHeader
+import com.amethyst2213.operatorchat.ui.components.UpdateBanner
 import com.amethyst2213.operatorchat.ui.theme.Palette
 
 /**
@@ -82,6 +85,8 @@ fun SettingsScreen(
     onPing: () -> Unit,
     onCheckUpdate: () -> Unit,
     onDisconnect: () -> Unit,
+    update: UpdateOffer? = null,
+    onInstallUpdate: () -> Unit = {},
 ) {
     var tokenVisible by rememberSaveable { mutableStateOf(false) }
 
@@ -241,6 +246,10 @@ fun SettingsScreen(
                 icon = Icons.Outlined.SystemUpdate,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (update != null) {
+                Spacer(Modifier.height(10.dp))
+                UpdateBanner(update = update, onInstall = onInstallUpdate)
+            }
         }
 
         Spacer(Modifier.height(12.dp))

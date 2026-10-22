@@ -38,8 +38,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.amethyst2213.operatorchat.UpdateOffer
 import com.amethyst2213.operatorchat.ui.components.ErrorBanner
 import com.amethyst2213.operatorchat.ui.components.PrimaryButton
+import com.amethyst2213.operatorchat.ui.components.UpdateBanner
 import com.amethyst2213.operatorchat.ui.theme.Palette
 
 /**
@@ -57,6 +59,8 @@ fun LoginScreen(
     initialToken: String,
     busy: Boolean,
     error: String?,
+    update: UpdateOffer? = null,
+    onInstallUpdate: () -> Unit = {},
     onConnect: (url: String, token: String) -> Unit,
 ) {
     var url by rememberSaveable { mutableStateOf(initialUrl) }
@@ -145,6 +149,13 @@ fun LoginScreen(
         if (!error.isNullOrBlank()) {
             Spacer(Modifier.height(14.dp))
             ErrorBanner(error)
+        }
+
+        // The update offer lives on the sign-in screen too: a phone that
+        // cannot sign in is exactly the phone that needs the new build.
+        if (update != null) {
+            Spacer(Modifier.height(14.dp))
+            UpdateBanner(update = update, onInstall = onInstallUpdate)
         }
 
         Spacer(Modifier.height(22.dp))

@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Sensors
@@ -40,11 +41,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.amethyst2213.operatorchat.ChatBridge
+import com.amethyst2213.operatorchat.UpdateOffer
 import com.amethyst2213.operatorchat.ui.components.EmptyState
 import com.amethyst2213.operatorchat.ui.components.InitialAvatar
 import com.amethyst2213.operatorchat.ui.components.LoadingRow
 import com.amethyst2213.operatorchat.ui.components.SectionHeader
 import com.amethyst2213.operatorchat.ui.components.StatusPill
+import com.amethyst2213.operatorchat.ui.components.UpdateBanner
 import com.amethyst2213.operatorchat.ui.components.avatarColorFor
 import com.amethyst2213.operatorchat.ui.theme.Palette
 
@@ -65,21 +68,24 @@ fun InboxScreen(
     error: String?,
     liveBadge: Boolean,
     nextShowTitle: String?,
+    allConversations: Boolean = false,
+    hasMore: Boolean = false,
+    update: UpdateOffer? = null,
+    onAllConversationsChange: (Boolean) -> Unit = {},
     onQueryChange: (String) -> Unit,
     onOpen: (ChatBridge.Conversation) -> Unit,
     onOpenLive: () -> Unit,
     onOpenSchedule: () -> Unit,
     onOpenSettings: () -> Unit,
     onRefresh: () -> Unit,
+    onLoadMore: () -> Unit = {},
+    onNewChat: () -> Unit = {},
+    onInstallUpdate: () -> Unit = {},
 ) {
-    var filter by rememberSaveable { mutableStateOf(InboxFilter.ALL) }
+    var favouritesOnly by rememberSaveable { mutableStateOf(false) }
 
     val visible = conversations.filter { conversation ->
-        when (filter) {
-            InboxFilter.NEEDS_REPLY -> conversation.unreadReplyable > 0
-            InboxFilter.FAVOURITES -> conversation.favorite
-            else -> true
-        }
+        if (favouritesOnly) conversation.favorite else true
     }
 
     val needsReply = visible.filter { it.unreadReplyable > 0 }
@@ -122,6 +128,13 @@ fun InboxScreen(
                 Spacer(Modifier.width(4.dp))
             }
 
+            IconButton(onClick = onNewChat) {
+                Icon(
+                    imageVector = Icons.Outlined.EditNote,
+                    contentDescription = "Message a member",
+                    tint = Palette.TextSecondary,
+                )
+            }
             IconButton(onClick = onOpenLive) {
                 Icon(
                     imageVector = Icons.Outlined.Sensors,
@@ -145,7 +158,7 @@ fun InboxScreen(
             }
         }
 
-        // The search field and the filters.
+        // The search field and the scope.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -162,15 +175,28 @@ fun InboxScreen(
             )
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                InboxFilter.entries.forEach { option ->
-                    val selected = filter == option
-                    StatusPill(
-                        text = option.label,
-                        background = if (selected) Palette.Amethyst else Palette.SurfaceElevated,
-                        foreground = if (selected) Palette.White else Palette.TextSecondary,
-                        modifier = Modifier.clickable { filter = option },
-                    )
-                }
+                // The scope: "Unread" is the badge list, "All conversations"
+                // is everything the server returned. Without the second one
+                // a conversation could never be found again once it had
+                // been answered.
+                StatusPill(
+                    text = "Unread",
+                    background = if (!allConversations) Palette.Amethyst else Palette.SurfaceElevated,
+                    foreground = if (!allConversations) Palette.White else Palette.TextSecondary,
+                    modifier = Modifier.clickable { onAllConversationsChange(false) },
+                )
+                StatusPill(
+                    text = "All conversations",
+                    background = if (allConversations) Palette.Amethyst else Palette.SurfaceElevated,
+                    foreground = if (allConversations) Palette.White else Palette.TextSecondary,
+                    modifier = Modifier.clickable { onAllConversationsChange(true) },
+                )
+                StatusPill(
+                    text = "Favourites",
+                    background = if (favouritesOnly) Palette.Amethyst else Palette.SurfaceElevated,
+                    foreground = if (favouritesOnly) Palette.White else Palette.TextSecondary,
+                    modifier = Modifier.clickable { favouritesOnly = !favouritesOnly },
+                )
             }
             if (!nextShowTitle.isNullOrBlank()) {
                 Spacer(Modifier.height(10.dp))
@@ -182,14 +208,19 @@ fun InboxScreen(
             }
         }
 
+        if (update != null) {
+            UpdateBanner(update = update, onInstall = onInstallUpdate)
+        }
+
         when {
             loading && conversations.isEmpty() -> LoadingRow()
             visible.isEmpty() -> EmptyState(
                 title = if (query.isBlank()) "Nothing here yet" else "No matches",
-                message = if (query.isBlank()) {
-                    "Member conversations show up here as soon as somebody writes."
-                } else {
-                    "No conversation matches \"$query\"."
+                message = when {
+                    query.isNotBlank() -> "No conversation matches \"$query\"."
+                    favouritesOnly -> "No favourite conversations yet."
+                    allConversations -> "No conversations yet."
+                    else -> "No member is waiting for an answer. Switch to \"All conversations\" to see the history."
                 },
                 icon = Icons.Outlined.ChatBubbleOutline,
             )
@@ -216,15 +247,36 @@ fun InboxScreen(
                         )
                     }
                 }
+                if (hasMore) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            StatusPill(
+                                text = "Load more",
+                                background = Palette.SurfaceElevated,
+                                foreground = Palette.TextSecondary,
+                                modifier = Modifier.clickable { onLoadMore() },
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 }
 
-/** The inbox filters. */
+/**
+ * The inbox filters.
+ *
+ * "Needs a reply" is the scope (see the pills above), so only the favourite
+ * filter is left.
+ */
 enum class InboxFilter(val label: String) {
     ALL("All"),
-    NEEDS_REPLY("Needs a reply"),
     FAVOURITES("Favourites"),
 }
 

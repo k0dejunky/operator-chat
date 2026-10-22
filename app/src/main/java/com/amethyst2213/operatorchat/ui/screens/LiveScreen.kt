@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -78,6 +79,9 @@ fun LiveScreen(
     onFlipCamera: () -> Unit,
     onToggleMic: () -> Unit,
     onTogglePause: () -> Unit,
+    onToggleRecord: () -> Unit = {},
+    recording: Boolean = false,
+    recordFile: String? = null,
     onChatDraftChange: (String) -> Unit,
     onSendChat: () -> Unit,
     onSurfaceReady: (android.graphics.SurfaceTexture, Int, Int) -> Unit,
@@ -131,6 +135,23 @@ fun LiveScreen(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            if (recording) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.FiberManualRecord,
+                        contentDescription = "Recording",
+                        tint = Palette.Live,
+                        modifier = Modifier.size(12.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "REC",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Palette.Live,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+            }
             LiveBadge(
                 live = state.isLive,
                 paused = paused,
@@ -176,6 +197,17 @@ fun LiveScreen(
                             imageVector = if (paused) Icons.Filled.PlayArrow else Icons.Filled.Pause,
                             contentDescription = if (paused) "Resume the picture" else "Pause the picture",
                             tint = if (paused) Palette.Warning else Palette.TextPrimary,
+                        )
+                    }
+                    IconButton(onClick = onToggleRecord) {
+                        Icon(
+                            imageVector = Icons.Filled.FiberManualRecord,
+                            contentDescription = if (recording) {
+                                "Stop the recording"
+                            } else {
+                                "Record the broadcast on this phone"
+                            },
+                            tint = if (recording) Palette.Live else Palette.TextPrimary,
                         )
                     }
                     IconButton(onClick = onFlipCamera) {
@@ -226,6 +258,15 @@ fun LiveScreen(
                     )
                 }
             }
+        }
+
+        if (recording && !recordFile.isNullOrBlank()) {
+            Text(
+                text = "Saving to $recordFile",
+                style = MaterialTheme.typography.labelSmall,
+                color = Palette.TextTertiary,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+            )
         }
 
         // The live chat.

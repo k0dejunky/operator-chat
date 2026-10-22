@@ -9,14 +9,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.view.View
-import android.view.ViewGroup
-import android.widget.ArrayAdapter
 import android.widget.EditText
-import android.widget.ListView
-import android.widget.TextView
-import android.text.Editable
-import android.text.TextWatcher
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -27,18 +20,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.lifecycle.repeatOnLifecycle
+import com.amethyst2213.operatorchat.ui.screens.InboxScreen
+import com.amethyst2213.operatorchat.ui.screens.LoginScreen
+import com.amethyst2213.operatorchat.ui.theme.OperatorTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import com.amethyst2213.operatorchat.ui.screens.InboxScreen
-import com.amethyst2213.operatorchat.ui.screens.LoginScreen
-import com.amethyst2213.operatorchat.ui.theme.OperatorTheme
 
 /**
  * Login + the operator inbox.
@@ -71,6 +62,19 @@ class MainActivity : AppCompatActivity() {
 
     /** The search text (held here so the field does not clear on recomposition). */
     private var searchQuery by mutableStateOf("")
+
+    /** A published build that is newer than the installed one. */
+    private var updateOffer by mutableStateOf<UpdateOffer?>(null)
+
+    /**
+     * The connection that is actually in use.
+     *
+     * The settings screen can change the address and the token while this
+     * activity is in the background, so the applied connection is compared
+     * with the stored one every time the screen comes back.
+     */
+    private var appliedUrl by mutableStateOf("")
+    private var appliedToken by mutableStateOf("")
 
     private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -107,7 +111,11 @@ class MainActivity : AppCompatActivity() {
         setContent {
             OperatorTheme {
                 val state by vm.state.collectAsStateWithLifecycle()
-                val connected = vm.bridge != null
+                // A rejected token is not a connection: the operator has to
+                // sign in again, and the inbox must not sit there empty
+                // pretending everything is fine.
+                val connected = vm.bridge != null &&
+                    state.connection != MainViewModel.Connection.UNAUTHORIZED
 
                 if (!connected) {
                     LoginScreen(
@@ -115,6 +123,8 @@ class MainActivity : AppCompatActivity() {
                         initialToken = operatorToken,
                         busy = state.loading,
                         error = statusMessage ?: state.error,
+                        update = updateOffer,
+                        onInstallUpdate = { installUpdate() },
                         onConnect = { url, token ->
                             statusMessage = null
                             connect(url, token)
@@ -129,6 +139,11 @@ class MainActivity : AppCompatActivity() {
                         error = statusMessage ?: state.error,
                         liveBadge = liveNow,
                         nextShowTitle = nextShowTitle,
+                        allConversations = vm.allUsersMode,
+                        hasMore = state.hasMore,
+                        update = updateOffer,
+                        onInstallUpdate = { installUpdate() },
+                        onAllConversationsChange = { all -> vm.setAllUsers(all) },
                         onQueryChange = { query ->
                             searchQuery = query
                             searchJob?.cancel()
@@ -142,10 +157,17 @@ class MainActivity : AppCompatActivity() {
                         onOpenSchedule = { openSchedule() },
                         onOpenSettings = { openSettings() },
                         onRefresh = { vm.refresh(showLoading = true) },
+                        onLoadMore = { vm.loadMore() },
+                        onNewChat = { showNewChatDialog() },
                     )
                 }
             }
         }
+
+        // The update check does not need a session: the published manifest
+        // is public, so a phone that cannot sign in still gets the fix.
+        checkForUpdate()
+        UpdateWorker.schedule(this)
 
         if (savedUrl.isNotEmpty() && savedToken.isNotEmpty()) {
             // Restore the session behind the biometric lock when it is enabled.
@@ -160,6 +182,23 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        // The settings screen can change the connection while this activity
+        // is in the background. Pick the change up instead of keeping a
+        // bridge that points at the old server (or, worse, at nothing).
+        val storedUrl = SecurePrefs.url(this).trim()
+        val storedToken = SecurePrefs.token(this).trim()
+        if (storedUrl != appliedUrl || storedToken != appliedToken) {
+            if (storedUrl.isEmpty() || storedToken.isEmpty()) {
+                appliedUrl = ""
+                appliedToken = ""
+                vm.logout()
+                stopPollService()
+            } else {
+                serverUrl = storedUrl
+                operatorToken = storedToken
+                restoreSession()
+            }
+        }
         if (vm.bridge != null) {
             vm.refresh(showLoading = false)
             startRefreshLoop()
@@ -182,26 +221,66 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
+    /**
+     * Sign in with the address and the token the operator typed.
+     *
+     * The token used to be read back out of the keystore instead of being
+     * taken from the field, so a fresh install could never sign in at all.
+     */
     private fun connect(url: String, token: String) {
         val clean = url.trim().trimEnd('/')
-        if (clean.isEmpty() || token.trim().isEmpty()) {
-            statusMessage = "Server URL and token are required."
+        val tok = token.trim()
+        if (clean.isEmpty() || tok.isEmpty()) {
+            statusMessage = "The server address and the token are both required."
             return
         }
         serverUrl = clean
-        operatorToken = token.trim()
-        vm.connect(clean, serverToken())
+        operatorToken = tok
+        appliedUrl = clean
+        appliedToken = tok
+        statusMessage = null
+        vm.connect(clean, tok)
+        learnSiteZone()
         startPollService()
         startRefreshLoop()
+    }
+
+    /**
+     * Learn the site's timezone.
+     *
+     * The app used to read it out of its preferences, but nothing ever wrote
+     * it - so the inbox was ordered by a hardcoded zone and every
+     * "2 min ago" was off by the offset.
+     */
+    private fun learnSiteZone() {
+        val url = SecurePrefs.url(this).trim()
+        val token = SecurePrefs.token(this).trim()
+        if (url.isEmpty() || token.isEmpty()) return
+        lifecycleScope.launch {
+            try {
+                val zone = LiveToolsBridge(url, token).siteConfig().siteTimezone
+                SiteZone.save(this@MainActivity, zone)
+            } catch (_: Exception) {
+                // The default zone is used until the server answers.
+            }
+        }
     }
 
     private fun restoreSession() {
+        val url = SecurePrefs.url(this).trim()
+        val token = SecurePrefs.token(this).trim()
+        if (url.isEmpty() || token.isEmpty()) {
+            return
+        }
+        appliedUrl = url
+        appliedToken = token
+        serverUrl = url
+        operatorToken = token
         vm.restore()
+        learnSiteZone()
         startPollService()
         startRefreshLoop()
     }
-
-    private fun serverToken(): String = SecurePrefs.token(this)
 
     private fun startPollService() {
         try {
@@ -256,6 +335,171 @@ class MainActivity : AppCompatActivity() {
         val i = Intent(this, SettingsActivity::class.java)
         i.putExtra("base_url", serverUrl)
         startActivity(i)
+    }
+
+    // ------------------------------------------------------------- updates
+
+    /**
+     * Look for a newer build of the app.
+     *
+     * The check runs on every start but at most once every six hours (the
+     * timestamp is kept in the preferences), so it never turns into a poll
+     * of the site.
+     */
+    private fun checkForUpdate(force: Boolean = false) {
+        val url = SecurePrefs.url(this).trim()
+        if (url.isEmpty()) return
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        val last = prefs.getLong("update_checked_at", 0L)
+        val now = System.currentTimeMillis()
+        if (!force && last > 0L && now - last < CHECK_INTERVAL_MS) return
+        prefs.edit().putLong("update_checked_at", now).apply()
+
+        lifecycleScope.launch {
+            val offer = try {
+                Updater.checkLatest(this@MainActivity, url, SecurePrefs.token(this@MainActivity).trim())
+            } catch (_: Exception) {
+                null
+            }
+            if (offer != null) updateOffer = offer
+        }
+    }
+
+    /** Download the offered build, verify it and hand it to the installer. */
+    private fun installUpdate() {
+        val offer = updateOffer ?: return
+        val url = SecurePrefs.url(this).trim()
+        if (url.isEmpty()) {
+            statusMessage = "The server address is not set."
+            return
+        }
+        lifecycleScope.launch {
+            val file = Updater.fetchVerifiedApk(this@MainActivity, url, offer) { phase ->
+                lifecycleScope.launch { updateOffer = offer.copy(phase = phase) }
+            }
+            if (file == null) {
+                updateOffer = offer.copy(phase = UpdatePhase.FAILED)
+                statusMessage = "The update could not be downloaded or verified."
+                return@launch
+            }
+            Updater.install(this@MainActivity, file) { phase ->
+                lifecycleScope.launch { updateOffer = offer.copy(phase = phase) }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- new chat
+
+    /**
+     * Message any member.
+     *
+     * This action was in the v2.50 overflow menu and was dropped in the
+     * rewrite, so the operator could only ever answer somebody who had
+     * written first. The conversation is opened (or created) with the
+     * member that is picked.
+     */
+    private fun showNewChatDialog() {
+        val bridge = vm.bridge ?: run {
+            statusMessage = "Sign in first."
+            return
+        }
+        val query = EditText(this).apply {
+            hint = "Search members by email..."
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+        }
+        val results = mutableListOf<ChatBridge.UserResult>()
+        val list = android.widget.ListView(this)
+        val pad = (12 * resources.displayMetrics.density).toInt()
+        query.setPadding(pad, pad, pad, pad)
+        list.setPadding(0, 0, 0, 0)
+        val adapter = object : android.widget.ArrayAdapter<ChatBridge.UserResult>(
+            this, android.R.layout.simple_list_item_2, android.R.id.text1, results,
+        ) {
+            override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
+                val v = super.getView(position, convertView, parent)
+                val u = getItem(position) ?: return v
+                val t1 = v.findViewById<android.widget.TextView>(android.R.id.text1)
+                val t2 = v.findViewById<android.widget.TextView>(android.R.id.text2)
+                t1?.text = u.username
+                t2?.text = u.email + (if (u.canChat) " - chat enabled" else " - no chat plan")
+                return v
+            }
+        }
+        list.adapter = adapter
+
+        // The dialog is created below; the list needs a handle on it to
+        // close itself once a member has been picked.
+        var dialog: AlertDialog? = null
+
+        var searchJob: Job? = null
+        query.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
+                searchJob?.cancel()
+                val q = s?.toString()?.trim().orEmpty()
+                if (q.length < 2) {
+                    results.clear()
+                    adapter.notifyDataSetChanged()
+                    return
+                }
+                searchJob = lifecycleScope.launch {
+                    try {
+                        val found = bridge.searchUsers(q)
+                        results.clear()
+                        results.addAll(found)
+                        adapter.notifyDataSetChanged()
+                    } catch (_: Exception) {
+                        statusMessage = "The member search failed - check the connection."
+                    }
+                }
+            }
+
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
+
+        list.setOnItemClickListener { _, _, position, _ ->
+            val user = adapter.getItem(position) ?: return@setOnItemClickListener
+            lifecycleScope.launch {
+                try {
+                    val (cid, username) = bridge.startConversation(user.id)
+                    if (cid > 0L) {
+                        dialog?.dismiss()
+                        openChat(
+                            ChatBridge.Conversation(
+                                id = cid,
+                                userEmail = user.email,
+                                username = username.ifEmpty { user.username },
+                                aiMode = "operator",
+                                status = "open",
+                                lastMessage = "",
+                                lastSender = "",
+                                lastMessageAt = "",
+                                memberCount = 0,
+                                unreadReplyable = 0,
+                                updatedAt = "",
+                            ),
+                        )
+                    }
+                } catch (e: Exception) {
+                    statusMessage = "Could not start the conversation: ${e.message ?: "unknown error"}"
+                }
+            }
+        }
+
+        val content = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            addView(query)
+            addView(list, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f,
+            ))
+        }
+        dialog = AlertDialog.Builder(this)
+            .setTitle("Message any member")
+            .setView(content)
+            .setNegativeButton("Close", null)
+            .create()
+        dialog?.show()
     }
 
     // ------------------------------------------------------------- biometric
@@ -349,8 +593,8 @@ class MainActivity : AppCompatActivity() {
     /**
      * Wipes the passcode AND the saved server URL + operator token, then sends
      * the operator to Settings to enter them again. Clearing only the passcode
-     * would make the lock pointless: anyone could tap "forgot" and walk into the
-     * inbox, so the credentials the lock protects go with it.
+     * would make the lock pointless: anyone could tap "forgot" and walk into
+     * the inbox, so the credentials the lock protects go with it.
      */
     private fun confirmPasscodeReset() {
         AlertDialog.Builder(this)
@@ -362,6 +606,10 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("Reset") { _, _ ->
                 Passcode.clear(this)
                 SecurePrefs.clear(this)
+                appliedUrl = ""
+                appliedToken = ""
+                vm.logout()
+                stopPollService()
                 toast("Passcode and credentials cleared. Re-enter them in Settings.")
                 startActivity(Intent(this, SettingsActivity::class.java))
             }
@@ -373,5 +621,10 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
         }
+    }
+
+    companion object {
+        /** How often the app looks for a new build. */
+        private const val CHECK_INTERVAL_MS = 6L * 60 * 60 * 1000
     }
 }
