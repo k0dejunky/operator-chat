@@ -194,6 +194,8 @@ class LiveActivity : AppCompatActivity() {
                 // off the UI thread or the screen freezes.
                 withContext(Dispatchers.Default) { created.prepare(landscape) }
             }
+            // The surface was there first; now the encoder can take it.
+            session?.let { attachPendingPreview(it) }
             session?.attachPreviewIfReady()
         }
     }
@@ -232,9 +234,29 @@ class LiveActivity : AppCompatActivity() {
         prepareCameraAsync()
     }
 
+    /**
+     * The preview surface, kept until the encoder can take it.
+     *
+     * The surface arrives long before the camera and the encoder are ready
+     * (they take 100-500ms), and the session may not even exist yet. It was
+     * dropped on the floor in that case, and the preview box stayed black.
+     */
+    private var pendingSurface: SurfaceTexture? = null
+    private var pendingWidth = 0
+    private var pendingHeight = 0
+
     private fun attachSurface(surface: SurfaceTexture, width: Int, height: Int) {
         surfaceReady = true
+        pendingSurface = surface
+        pendingWidth = width
+        pendingHeight = height
         session?.attachPreview(surface, width, height)
+    }
+
+    /** Hand the pending surface to a session that has just been created. */
+    private fun attachPendingPreview(target: BroadcastSession) {
+        val surface = pendingSurface ?: return
+        target.attachPreview(surface, pendingWidth, pendingHeight)
     }
 
     // ------------------------------------------------------------- controls
@@ -281,6 +303,7 @@ class LiveActivity : AppCompatActivity() {
                 val landscape = resources.configuration.orientation ==
                     android.content.res.Configuration.ORIENTATION_LANDSCAPE
                 withContext(Dispatchers.Default) { created.prepare(landscape) }
+                attachPendingPreview(created)
             }
 
             val started = withContext(Dispatchers.IO) { startLiveSession(base, token) }

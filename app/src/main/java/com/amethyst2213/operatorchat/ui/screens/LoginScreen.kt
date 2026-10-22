@@ -173,7 +173,7 @@ fun LoginScreen(
         Spacer(Modifier.height(14.dp))
 
         Text(
-            text = "The token is an operator device token. Create one in the admin panel under Chat.",
+            text = "The token is an operator device token. Create one in the admin panel under Operator app.",
             style = MaterialTheme.typography.bodySmall,
             color = Palette.TextTertiary,
             modifier = Modifier.fillMaxWidth(),

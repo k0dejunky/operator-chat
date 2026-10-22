@@ -30,19 +30,16 @@ class BroadcastSession(
     private var stream: RtmpStream? = null
     private var camera: Camera2Source? = null
     private var microphone: MicrophoneSource? = null
-    private var previewSurface: SurfaceTexture? = null
-
     /**
-     * The preview surface, and its size.
+     * The camera preview.
      *
-     * The surface usually arrives BEFORE the encoder is ready (the camera
-     * takes a moment to open), so it is kept here and attached as soon as
-     * there is a stream to attach it to. Otherwise the preview stayed black
-     * until the operator left and came back.
+     * The surface usually arrives BEFORE the camera and the encoder are
+     * ready, so it is kept and attached when the encoder is there. The
+     * preview used to be a black box on a real phone for exactly that
+     * reason: the surface was wiped by the teardown that precedes the
+     * encoder, and never attached.
      */
-    private var pendingSurface: SurfaceTexture? = null
-    private var pendingWidth = 0
-    private var pendingHeight = 0
+    private val preview = PreviewAttachment<SurfaceTexture>()
 
     /** True while the broadcast is also written to an MP4 on the device. */
     @Volatile
@@ -68,7 +65,11 @@ class BroadcastSession(
      * operator pressed Go Live.
      */
     fun prepare(landscape: Boolean) {
-        release()
+        // Only the previous stream is torn down. A full release() would drop
+        // the pending surface, and the surface is usually there BEFORE the
+        // encoder is - so the preview would never be attached and the box
+        // would stay black.
+        releaseStream()
         listener.onState(BroadcastState.Preparing)
 
         try {
@@ -139,31 +140,37 @@ class BroadcastSession(
      * can be attached and detached freely.
      */
     fun attachPreview(surface: SurfaceTexture, width: Int, height: Int) {
-        previewSurface = surface
-        pendingSurface = surface
-        pendingWidth = width
-        pendingHeight = height
+        preview.setSurface(surface, width, height)
         attachPreviewIfReady()
     }
 
-    /** Attach the preview, but only when the encoder is there. */
+    /**
+     * Attach the preview, but only when the encoder is there.
+     *
+     * A failed attach is not fatal: the surface stays, and the next call
+     * (the encoder became ready, the activity came back) tries again.
+     */
     fun attachPreviewIfReady() {
-        val surface = pendingSurface ?: return
-        val rtmp = stream ?: return
-        try {
-            rtmp.startPreview(surface, pendingWidth, pendingHeight)
-        } catch (error: Throwable) {
-            Log.e(TAG, "the preview could not be attached", error)
+        preview.attachWhenReady { surface, width, height ->
+            val rtmp = stream ?: return@attachWhenReady false
+            try {
+                rtmp.startPreview(surface, width, height)
+                true
+            } catch (error: Throwable) {
+                Log.e(TAG, "the preview could not be attached", error)
+                false
+            }
         }
     }
 
     fun detachPreview() {
-        previewSurface = null
         try {
             stream?.stopPreview(false)
         } catch (error: Throwable) {
             Log.e(TAG, "the preview could not be detached", error)
         }
+        // The surface stays: it is attached again when the encoder is ready.
+        preview.detach()
     }
 
     /** Switch between the front and the back camera. */
@@ -202,6 +209,19 @@ class BroadcastSession(
 
     /** Release the camera, the encoders and the RTMP connection. */
     fun release() {
+        releaseStream()
+        preview.clear()
+        recording = false
+    }
+
+    /**
+     * Release the stream, but KEEP the preview surface.
+     *
+     * The surface outlives the encoder it belongs to: the camera and the
+     * encoders are rebuilt whenever the stream is prepared, and the surface
+     * (which the system gives us) stays valid.
+     */
+    private fun releaseStream() {
         try {
             stream?.stopRecord()
         } catch (_: Throwable) {
@@ -217,9 +237,7 @@ class BroadcastSession(
         stream = null
         camera = null
         microphone = null
-        previewSurface = null
-        pendingSurface = null
-        recording = false
+        preview.detach()
     }
 
     // ------------------------------------------------------------- recording

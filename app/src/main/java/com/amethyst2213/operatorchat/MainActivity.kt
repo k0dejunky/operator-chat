@@ -232,7 +232,7 @@ class MainActivity : AppCompatActivity() {
      * The token used to be read back out of the keystore instead of being
      * taken from the field, so a fresh install could never sign in at all.
      */
-    private fun connect(url: String, token: String) {
+    internal fun connect(url: String, token: String) {
         val clean = url.trim().trimEnd('/')
         val tok = token.trim()
         if (clean.isEmpty() || tok.isEmpty()) {
@@ -313,7 +313,10 @@ class MainActivity : AppCompatActivity() {
         if (refreshJob?.isActive == true || !resumed) return
         refreshJob = lifecycleScope.launch {
             while (true) {
-                delay(30000)
+                // The wait is on the default dispatcher, not the main one: a
+                // delay on the main clock is "pending work" for a test
+                // harness, which then never sees the app go idle.
+                withContext(Dispatchers.Default) { delay(REFRESH_INTERVAL_MS) }
                 vm.refresh(showLoading = false)
             }
         }
@@ -358,17 +361,20 @@ class MainActivity : AppCompatActivity() {
      * of the site.
      */
     private fun checkForUpdate(force: Boolean = false) {
-        val url = SecurePrefs.url(this).trim()
-        if (url.isEmpty()) return
-        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
-        val last = prefs.getLong("update_checked_at", 0L)
-        val now = System.currentTimeMillis()
-        if (!force && last > 0L && now - last < CHECK_INTERVAL_MS) return
-        prefs.edit().putLong("update_checked_at", now).apply()
-
         lifecycleScope.launch {
+            // The keystore read is NOT on the main thread: it can take a
+            // moment, and the app's start-up must not wait for it.
+            val url = withContext(Dispatchers.IO) { SecurePrefs.url(this@MainActivity).trim() }
+            if (url.isEmpty()) return@launch
+            val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+            val last = prefs.getLong("update_checked_at", 0L)
+            val now = System.currentTimeMillis()
+            if (!force && last > 0L && now - last < CHECK_INTERVAL_MS) return@launch
+            prefs.edit().putLong("update_checked_at", now).apply()
+
+            val token = withContext(Dispatchers.IO) { SecurePrefs.token(this@MainActivity).trim() }
             val offer = try {
-                Updater.checkLatest(this@MainActivity, url, SecurePrefs.token(this@MainActivity).trim())
+                Updater.checkLatest(this@MainActivity, url, token)
             } catch (_: Exception) {
                 null
             }
@@ -637,5 +643,15 @@ class MainActivity : AppCompatActivity() {
     companion object {
         /** How often the app looks for a new build. */
         private const val CHECK_INTERVAL_MS = 6L * 60 * 60 * 1000
+
+        /**
+         * How often the inbox is refreshed while the screen is open.
+         *
+         * This is only a safety net: the poll service pushes a refresh the
+         * moment a member writes, and the screen refreshes itself when it
+         * comes back to the front. A thirty-second loop on top of that was
+         * just load.
+         */
+        private const val REFRESH_INTERVAL_MS = 300_000L
     }
 }
