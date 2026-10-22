@@ -26,13 +26,23 @@ class SettingsActivity : AppCompatActivity() {
 
     private val prefs by lazy { getSharedPreferences("operator_chat", MODE_PRIVATE) }
 
-    private var serverUrl by mutableStateOf(SecurePrefs.url(this))
-    private var operatorToken by mutableStateOf(SecurePrefs.token(this))
-    private var notificationsOn by mutableStateOf(prefs.getBoolean("notify_enabled", true))
-    private var biometricOn by mutableStateOf(prefs.getBoolean("biometric_lock", true))
-    private var quietOn by mutableStateOf(prefs.getBoolean("quiet_hours_enabled", false))
-    private var quietStart by mutableStateOf(prefs.getString("quiet_start", "22:00") ?: "22:00")
-    private var quietEnd by mutableStateOf(prefs.getString("quiet_end", "08:00") ?: "08:00")
+    /**
+     * The stored connection and the notification switches.
+     *
+     * They are read in onCreate and NOT in the field initialisers: an
+     * initialiser runs while the object is still being constructed, when
+     * `this` is not yet a usable context - so `SecurePrefs.url(this)` threw
+     * a NullPointerException and the screen crashed the moment it was
+     * opened. The emulator found that; the tests could not, because the
+     * activity is never constructed there.
+     */
+    private var serverUrl by mutableStateOf("")
+    private var operatorToken by mutableStateOf("")
+    private var notificationsOn by mutableStateOf(true)
+    private var biometricOn by mutableStateOf(true)
+    private var quietOn by mutableStateOf(false)
+    private var quietStart by mutableStateOf("22:00")
+    private var quietEnd by mutableStateOf("08:00")
     private var toneName by mutableStateOf("Default")
     private var siteTimezone by mutableStateOf(ChatRows.DEFAULT_ZONE)
     private var status by mutableStateOf<String?>(null)
@@ -53,6 +63,15 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // The stored values, read now that the context exists.
+        serverUrl = SecurePrefs.url(this)
+        operatorToken = SecurePrefs.token(this)
+        notificationsOn = prefs.getBoolean("notify_enabled", true)
+        biometricOn = prefs.getBoolean("biometric_lock", true)
+        quietOn = prefs.getBoolean("quiet_hours_enabled", false)
+        quietStart = prefs.getString("quiet_start", "22:00") ?: "22:00"
+        quietEnd = prefs.getString("quiet_end", "08:00") ?: "08:00"
 
         toneName = readableName(
             prefs.getString("notify_tone", null)

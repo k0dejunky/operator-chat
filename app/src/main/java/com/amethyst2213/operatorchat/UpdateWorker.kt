@@ -82,10 +82,18 @@ class UpdateWorker(appContext: Context, params: WorkerParameters) :
         private const val NOTIFICATION_ID = 3001
         private const val WORK_NAME = "operator-chat-update-check"
 
-        /** Ask for the check every six hours. */
+        /**
+         * Ask for the check every six hours.
+         *
+         * The first run is delayed: the app already checks when it starts,
+         * so the worker is only the backstop for a phone that stays closed -
+         * and a job that fires the moment the app opens is work nobody asked
+         * for.
+         */
         fun schedule(context: Context) {
             try {
                 val request = PeriodicWorkRequestBuilder<UpdateWorker>(6, TimeUnit.HOURS)
+                    .setInitialDelay(15, TimeUnit.MINUTES)
                     .build()
                 WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                     WORK_NAME,

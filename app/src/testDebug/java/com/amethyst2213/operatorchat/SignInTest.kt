@@ -35,12 +35,12 @@ class SignInTest {
 
         // The first field is the server address, the second the token.
         val fields = compose.onAllNodes(hasSetTextAction())
-        fields[0].performTextInput("https://example.test/gallery")
+        fields[0].performTextInput("http://127.0.0.1:9/gallery")
         fields[1].performTextInput("the-typed-token")
         compose.onNodeWithText("Connect").performClick()
         compose.waitForIdle()
 
         assertEquals("the typed token was not stored", "the-typed-token", SecurePrefs.token(context))
-        assertEquals("the server address was not stored", "https://example.test/gallery", SecurePrefs.url(context))
+        assertEquals("the server address was not stored", "http://127.0.0.1:9/gallery", SecurePrefs.url(context))
     }
 }

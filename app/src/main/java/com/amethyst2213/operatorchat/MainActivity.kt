@@ -203,6 +203,11 @@ class MainActivity : AppCompatActivity() {
             vm.refresh(showLoading = false)
             startRefreshLoop()
         }
+        // The operator comes back from the "install unknown apps" screen and
+        // the offer must still be there - with its button.
+        updateOffer?.let { offer ->
+            if (offer.phase == UpdatePhase.FAILED) updateOffer = offer.copy(phase = UpdatePhase.AVAILABLE)
+        }
     }
 
     override fun onPause() {
@@ -241,6 +246,11 @@ class MainActivity : AppCompatActivity() {
         statusMessage = null
         vm.connect(clean, tok)
         learnSiteZone()
+        // The address is only known from here on, so the update check runs
+        // now too: on a fresh install the check in onCreate had nothing to
+        // work with and the new build was only offered the NEXT time the
+        // app was opened.
+        checkForUpdate()
         startPollService()
         startRefreshLoop()
     }
@@ -278,6 +288,7 @@ class MainActivity : AppCompatActivity() {
         operatorToken = token
         vm.restore()
         learnSiteZone()
+        checkForUpdate()
         startPollService()
         startRefreshLoop()
     }

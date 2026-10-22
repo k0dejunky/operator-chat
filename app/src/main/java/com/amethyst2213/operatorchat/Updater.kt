@@ -9,6 +9,7 @@ import android.provider.Settings
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -40,6 +41,15 @@ object Updater {
     private val client: OkHttpClient by lazy { ChatBridge.SHARED_CLIENT }
 
     /**
+     * How long the check may take.
+     *
+     * A server that does not answer (a name that does not resolve, a
+     * network that swallows the packets) must not leave the check hanging
+     * around: it runs in the app's own start-up.
+     */
+    private const val CHECK_TIMEOUT_MS = 15_000L
+
+    /**
      * The newest build the site publishes.
      *
      * Returns null when the site cannot be reached, when there is no
@@ -50,6 +60,20 @@ object Updater {
         context: Context,
         baseUrl: String,
         token: String = "",
+    ): UpdateOffer? = withContext(Dispatchers.IO) {
+        // The timeout lives on the IO dispatcher on purpose: a timer on the
+        // main dispatcher keeps the main looper busy, and the app's own
+        // start-up would wait for it.
+        withTimeoutOrNull(CHECK_TIMEOUT_MS) {
+            checkLatestNow(context, baseUrl, token)
+        }
+    }
+
+    /** The check itself; [checkLatest] gives it a ceiling. */
+    private suspend fun checkLatestNow(
+        context: Context,
+        baseUrl: String,
+        token: String,
     ): UpdateOffer? {
         val base = baseUrl.trim().trimEnd('/').toHttpUrlOrNull() ?: return null
         val manifest = readManifest(base) ?: return null

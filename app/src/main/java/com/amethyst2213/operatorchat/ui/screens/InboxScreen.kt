@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.amethyst2213.operatorchat.ChatBridge
 import com.amethyst2213.operatorchat.UpdateOffer
 import com.amethyst2213.operatorchat.ui.components.EmptyState
+import com.amethyst2213.operatorchat.ui.components.ErrorBanner
 import com.amethyst2213.operatorchat.ui.components.InitialAvatar
 import com.amethyst2213.operatorchat.ui.components.LoadingRow
 import com.amethyst2213.operatorchat.ui.components.SectionHeader
@@ -210,6 +211,17 @@ fun InboxScreen(
 
         if (update != null) {
             UpdateBanner(update = update, onInstall = onInstallUpdate)
+        }
+
+        // The error is shown HERE and not only on the sign-in screen: an
+        // empty inbox with no explanation is the worst possible answer to
+        // "why is nothing there?" - and it is exactly what a rejected token
+        // or an unreachable server looks like.
+        if (!error.isNullOrBlank()) {
+            ErrorBanner(
+                message = error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
         }
 
         when {

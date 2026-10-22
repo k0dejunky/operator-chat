@@ -34,6 +34,21 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
         .header("Authorization", "Bearer $token")
 
     /**
+     * A text field, or null when the server sent a JSON null.
+     *
+     * org.json's optString(name, fallback) only uses the fallback when the
+     * key is MISSING - a key that is present with the value null comes back
+     * as the four-letter string "null". The server sends null for every
+     * message without an attachment, so the thread showed a paperclip with
+     * the word "null" next to it.
+     */
+    private fun JSONObject.textOrNull(key: String): String? {
+        if (isNull(key)) return null
+        val value = optString(key, "").trim()
+        return value.ifEmpty { null }
+    }
+
+    /**
      * The URL of a path on the site.
      *
      * The base URL is the site's base path (https://host/gallery), so the
@@ -156,18 +171,17 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 val c = arr.getJSONObject(i)
                 Conversation(
                     id = c.optLong("id", 0),
-                    userEmail = c.optString("user_email", ""),
-                    username = c.optString("username", "").ifEmpty {
-                        c.optString("user_email", "").substringBefore("@")
-                    },
-                    aiMode = c.optString("ai_mode", "retrieval"),
-                    status = c.optString("status", "open"),
-                    lastMessage = c.optString("last_message", ""),
-                    lastSender = c.optString("last_sender", ""),
-                    lastMessageAt = c.optString("last_message_at", ""),
+                    userEmail = c.textOrNull("user_email") ?: "",
+                    username = c.textOrNull("username")
+                        ?: (c.textOrNull("user_email") ?: "").substringBefore("@"),
+                    aiMode = c.textOrNull("ai_mode") ?: "retrieval",
+                    status = c.textOrNull("status") ?: "open",
+                    lastMessage = c.textOrNull("last_message") ?: "",
+                    lastSender = c.textOrNull("last_sender") ?: "",
+                    lastMessageAt = c.textOrNull("last_message_at") ?: "",
                     memberCount = c.optInt("member_count", 0),
                     unreadReplyable = c.optInt("unread_replyable", 0),
-                    updatedAt = c.optString("updated_at", ""),
+                    updatedAt = c.textOrNull("updated_at") ?: "",
                     memberReplyEnabled = c.optInt("member_reply_enabled", 1) == 1,
                     canChat = c.optInt("can_chat", 0) == 1,
                 )
@@ -196,8 +210,9 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 val u = arr.getJSONObject(i)
                 UserResult(
                     id = u.optLong("id", 0),
-                    email = u.optString("email", ""),
-                    username = u.optString("username", "").ifEmpty { u.optString("email", "").substringBefore("@") },
+                    email = u.textOrNull("email") ?: "",
+                    username = u.textOrNull("username")
+                        ?: (u.textOrNull("email") ?: "").substringBefore("@"),
                     canChat = u.optInt("can_chat", 0) == 1,
                     conversationId = if (u.isNull("conversation_id") || u.optLong("conversation_id", 0) == 0L) null else u.optLong("conversation_id"),
                     memberReplyEnabled = u.optInt("member_reply_enabled", 1) == 1,
@@ -611,13 +626,13 @@ class ChatBridge(private val baseUrl: String, private val token: String) {
                 id = m.optLong("id", 0),
                 conversationId = m.optLong("conversation_id", conversationId),
                 senderRole = m.optString("sender_role", "user"),
-                message = m.optString("message", ""),
-                createdAt = m.optString("created_at", ""),
-                attachmentName = m.optString("attachment_name", "").ifEmpty { null },
-                attachmentType = m.optString("attachment_type", "").ifEmpty { null },
-                attachmentUrl = m.optString("attachment_url", "").ifEmpty { null },
-                attachmentThumbUrl = m.optString("attachment_thumb_url", "").ifEmpty { null },
-                expiresAt = m.optString("expires_at", "").ifEmpty { null },
+                message = m.textOrNull("message") ?: "",
+                createdAt = m.textOrNull("created_at") ?: "",
+                attachmentName = m.textOrNull("attachment_name"),
+                attachmentType = m.textOrNull("attachment_type"),
+                attachmentUrl = m.textOrNull("attachment_url"),
+                attachmentThumbUrl = m.textOrNull("attachment_thumb_url"),
+                expiresAt = m.textOrNull("expires_at"),
                 maxViews = m.optInt("max_views", 0),
                 viewCount = m.optInt("view_count", 0),
                 mediaExpired = m.optBoolean("media_expired", false),

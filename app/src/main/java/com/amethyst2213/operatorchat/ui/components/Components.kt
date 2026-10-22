@@ -414,9 +414,13 @@ fun UpdateBanner(
             }
         }
         Spacer(Modifier.width(12.dp))
-        if (update.phase == UpdatePhase.AVAILABLE) {
+        // The button stays after a failure: the usual reason for one is the
+        // "install unknown apps" permission, and the operator grants it and
+        // comes straight back. Without the button they were stuck until the
+        // next check - six hours away.
+        if (update.phase == UpdatePhase.AVAILABLE || update.phase == UpdatePhase.FAILED) {
             StatusPill(
-                text = "Install",
+                text = if (update.phase == UpdatePhase.FAILED) "Try again" else "Install",
                 background = Palette.Amethyst,
                 foreground = Palette.White,
                 modifier = Modifier.clickable { onInstall() },
