@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -53,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -78,6 +81,12 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
     var pendingGo by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+    // With the keyboard open there is no room for a 16:9 preview, a control
+    // row and the chat on a phone: the chat and the composer used to end up
+    // underneath the keyboard. The keyboard collapses the preview; focus
+    // alone must NOT keep it collapsed (the field keeps focus after the IME
+    // closes, which hid the Go live/Stop controls).
+    val compact = rememberKeyboardOpen()
 
     val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
         PackageManager.PERMISSION_GRANTED
@@ -136,6 +145,7 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
                 .padding(horizontal = 14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (!compact) {
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -283,6 +293,7 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
                 }
             }
 
+            }
             if (!state.note.isNullOrBlank() && !state.state.isLive) {
                 Text(
                     state.note,
@@ -338,9 +349,21 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
                     value = draft,
                     onValueChange = { if (it.length <= 500) draft = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Message the viewers…", color = Studio.Dim) },
+                    placeholder = {
+                        Text(
+                            if (state.state.isLive) "Message the viewers…" else "Go live to chat",
+                            color = Studio.Dim,
+                        )
+                    },
                     singleLine = true,
                     shape = RoundedCornerShape(18.dp),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (state.state.isLive && draft.isNotBlank()) {
+                            vm.sendChat(draft)
+                            draft = ""
+                        }
+                    }),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Studio.Hairline,
                         unfocusedBorderColor = Studio.Hairline,
@@ -372,6 +395,29 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
             }
         }
     }
+}
+
+/**
+ * Whether the keyboard is covering the lower part of the window.
+ *
+ * `WindowInsets.ime` reports 0 on this activity: with
+ * `decorFitsSystemWindows(true)` and `adjustResize` the system RESIZES the
+ * window instead of dispatching an IME inset. The reliable signal is the
+ * activity view getting shorter than the screen.
+ */
+@Composable
+private fun rememberKeyboardOpen(): Boolean {
+    val view = androidx.compose.ui.platform.LocalView.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val screenHeightDp = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
+    var heightPx by remember { mutableStateOf(view.height) }
+    DisposableEffect(view) {
+        val listener = android.view.ViewTreeObserver.OnGlobalLayoutListener { heightPx = view.height }
+        view.viewTreeObserver.addOnGlobalLayoutListener(listener)
+        onDispose { view.viewTreeObserver.removeOnGlobalLayoutListener(listener) }
+    }
+    val heightDp = with(density) { heightPx.toDp().value }
+    return heightDp > 0f && heightDp < screenHeightDp * 0.8f
 }
 
 @Composable
