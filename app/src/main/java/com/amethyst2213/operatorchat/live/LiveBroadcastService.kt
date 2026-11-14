@@ -15,15 +15,25 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.amethyst2213.operatorchat.QuietHours
 import com.amethyst2213.operatorchat.R
+import com.amethyst2213.operatorchat.SecurePrefs
 import com.amethyst2213.operatorchat.ui.theme.Palette
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * The broadcast service: it owns the camera, the encoder and the RTMP
@@ -53,6 +63,35 @@ class LiveBroadcastService : Service() {
         private set
 
     /**
+     * The watcher of the live chat.
+     *
+     * The chat used to be read by the live screen, and the screen stops
+     * reading the moment the operator leaves it: a member wrote in the chat
+     * of a stream that was on air and the operator - in another app, or with
+     * the phone in their pocket - was never told. The watcher lives here,
+     * in the service that outlives the screen, so the operator is told for
+     * as long as the broadcast runs.
+     */
+    private var chatWatcher: LiveChatWatcher? = null
+    private var chatJob: Job? = null
+
+    /**
+     * True while the live screen is on top.
+     *
+     * The screen shows the chat itself, so a message that arrives while it
+     * is visible must not also become a notification - the operator is
+     * looking right at it.
+     */
+    @Volatile
+    private var chatVisible = false
+
+    /** How many member messages arrived since the last notification. */
+    private var chatUnread = 0
+
+    /** The newest member message, for the text of the notification. */
+    private var chatLatest: LiveChatMessage? = null
+
+    /**
      * The wake lock.
      *
      * Without it the screen sleeps during a broadcast, the CPU is throttled
@@ -61,13 +100,86 @@ class LiveBroadcastService : Service() {
      */
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /**
+     * The scope the chat watcher runs in.
+     *
+     * It is cancelled with the service: a watcher that outlived it would
+     * keep the connection open and keep posting notifications for a stream
+     * that is no longer on air.
+     */
+    private val scope = CoroutineScope(Dispatchers.IO)
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createChannel()
+        createChatChannel()
         instance = this
         _ready.value = this
+        startChatWatcher()
+    }
+
+    /**
+     * The live screen is on top (or not).
+     *
+     * The screen shows the chat, so a message that arrives while it is
+     * visible must not also become a notification.
+     */
+    fun setChatVisible(visible: Boolean) {
+        chatVisible = visible
+        if (visible) {
+            // What the operator can see is not unread any more.
+            chatUnread = 0
+            chatLatest = null
+            dismissChatNotification()
+        }
+    }
+
+    /**
+     * Watch the chat of the broadcast.
+     *
+     * The watcher starts with the service - which is created when the live
+     * screen opens and lives on while a broadcast runs - and it asks the
+     * server for everything that came in since the last message the
+     * operator was told about, so nothing is announced twice.
+     */
+    private fun startChatWatcher() {
+        stopChatWatcher()
+        val base = SecurePrefs.url(this).trim().trimEnd('/')
+        val token = SecurePrefs.token(this).trim()
+        if (base.isEmpty() || token.isEmpty()) return
+
+        val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
+        val since = prefs.getLong("live_chat_since", 0L)
+        val watcher = LiveChatWatcher(base, token, since)
+        chatWatcher = watcher
+
+        chatJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                val fresh = watcher.readOnce()
+                if (fresh.isNotEmpty()) {
+                    val member = fresh.filter { it.senderRole != "operator" }
+                    if (member.isNotEmpty()) {
+                        prefs.edit().putLong("live_chat_since", watcher.latestId).apply()
+                        if (!chatVisible) {
+                            chatLatest = member.last()
+                            chatUnread += member.size
+                            notifyChat()
+                        }
+                    } else {
+                        prefs.edit().putLong("live_chat_since", watcher.latestId).apply()
+                    }
+                }
+                delay(500)
+            }
+        }
+    }
+
+    private fun stopChatWatcher() {
+        chatJob?.cancel()
+        chatJob = null
+        chatWatcher = null
     }
 
     /**
@@ -101,9 +213,104 @@ class LiveBroadcastService : Service() {
 
     override fun onDestroy() {
         stopEverything()
+        stopChatWatcher()
+        scope.cancel()
         if (instance === this) instance = null
         if (_ready.value === this) _ready.value = null
         super.onDestroy()
+    }
+
+    /**
+     * Tell the operator that a member wrote in the chat of the broadcast.
+     *
+     * One notification for the whole chat, updated as more messages come
+     * in: a burst of ten messages must not be ten notifications.
+     */
+    private fun notifyChat() {
+        val latest = chatLatest ?: return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val quiet = QuietHours.isQuietNow(this)
+        val channel = chatChannel(manager, quiet)
+
+        val open = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, Class.forName("com.amethyst2213.operatorchat.LiveActivity")),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val title = if (chatUnread > 1) {
+            "$chatUnread new live chat messages"
+        } else {
+            "New live chat message from ${latest.name}"
+        }
+
+        val builder = NotificationCompat.Builder(this, channel)
+            .setContentTitle(title)
+            .setContentText(latest.message.take(120))
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setAutoCancel(true)
+            .setGroup("live_chat")
+            .setContentIntent(open)
+            .setPriority(if (quiet) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+
+        postChatNotification(builder.build())
+    }
+
+    /**
+     * The channel a live chat notification goes to.
+     *
+     * The quiet hours need their own (LOW) channel: the importance of a
+     * channel cannot be lowered once it has been used.
+     */
+    private fun chatChannel(manager: NotificationManager, quiet: Boolean): String {
+        if (Build.VERSION.SDK_INT < 26) return CHANNEL_ID_CHAT
+        val id = if (quiet) CHANNEL_ID_CHAT_QUIET else CHANNEL_ID_CHAT
+        if (manager.getNotificationChannel(id) == null) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    id,
+                    if (quiet) "Live chat (quiet)" else "Live chat",
+                    if (quiet) NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_HIGH,
+                ).apply {
+                    if (quiet) {
+                        setSound(null, null)
+                        enableVibration(false)
+                    }
+                }
+            )
+        }
+        return id
+    }
+
+    private fun createChatChannel() {
+        // The channel is created when the first notification is posted, so
+        // that the quiet variant does not exist before it is needed.
+    }
+
+    /**
+     * Post the notification, or skip it when the operator has denied
+     * POST_NOTIFICATIONS (Android 13+).
+     */
+    private fun postChatNotification(notification: Notification) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            return // the operator denied notifications: silently skip
+        }
+        try {
+            NotificationManagerCompat.from(this).notify(CHAT_NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // A revoked permission must never take the service down.
+        }
+    }
+
+    private fun dismissChatNotification() {
+        try {
+            NotificationManagerCompat.from(this).cancel(CHAT_NOTIFICATION_ID)
+        } catch (_: SecurityException) {
+        }
     }
 
     /** Release the camera, the encoders and the wake lock. */
@@ -270,6 +477,11 @@ class LiveBroadcastService : Service() {
 
         private const val CHANNEL_ID = "live_broadcast"
         private const val NOTIFICATION_ID = 2001
+
+        /** The live chat notification (one for the whole chat). */
+        private const val CHANNEL_ID_CHAT = "operator_live_chat"
+        private const val CHANNEL_ID_CHAT_QUIET = "operator_live_chat_quiet"
+        private const val CHAT_NOTIFICATION_ID = 2002
 
         /**
          * The foreground service types the app may be promoted with.

@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import com.amethyst2213.operatorchat.live.BroadcastSession
 import com.amethyst2213.operatorchat.live.BroadcastState
@@ -155,6 +156,11 @@ class LiveActivity : AppCompatActivity() {
             // onStart, so the state used to be missing on the first visit
             // and "Go live" did nothing. Wait for it instead.
             val service = LiveBroadcastService.awaitInstance() ?: return@launch
+            // The service is created by the system AFTER this activity's
+            // onStart, so the chat visibility is set here as well: a service
+            // that appears while the screen is already on top must know that
+            // the operator is looking at the chat.
+            service.setChatVisible(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
             service.state.collect { live -> state = live }
         }
     }
@@ -163,6 +169,9 @@ class LiveActivity : AppCompatActivity() {
         super.onResume()
         if (hasPermissions()) prepareCamera()
         startStats()
+        // The live screen shows the chat, so a message that arrives now must
+        // not also become a notification: the operator is looking at it.
+        setChatVisible(true)
     }
 
     /**
@@ -205,6 +214,14 @@ class LiveActivity : AppCompatActivity() {
         stopStats()
         stateJob?.cancel()
         stateJob = null
+        // The screen is not on top any more: a message that arrives now is
+        // something the operator has to be told about.
+        setChatVisible(false)
+    }
+
+    /** Tell the broadcast service whether this screen is showing the chat. */
+    private fun setChatVisible(visible: Boolean) {
+        LiveBroadcastService.current()?.setChatVisible(visible)
     }
 
     override fun onDestroy() {
