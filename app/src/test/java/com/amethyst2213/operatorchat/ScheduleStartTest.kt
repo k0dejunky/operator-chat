@@ -3,6 +3,7 @@ package com.amethyst2213.operatorchat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.amethyst2213.operatorchat.ui.schedule.ScheduleViewModel
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
@@ -19,19 +20,19 @@ class ScheduleStartTest {
 
     @Test
     fun `a blank zone falls back to UTC instead of crashing`() {
-        val start = ScheduleActivity.defaultStart("", noon)
+        val start = ScheduleViewModel.defaultStart("", noon)
         assertEquals("2026-10-21 13:00", start)
     }
 
     @Test
     fun `an unknown zone falls back to UTC instead of crashing`() {
-        val start = ScheduleActivity.defaultStart("Mars/Olympus", noon)
+        val start = ScheduleViewModel.defaultStart("Mars/Olympus", noon)
         assertEquals("2026-10-21 13:00", start)
     }
 
     @Test
     fun `the site timezone is used`() {
-        val start = ScheduleActivity.defaultStart("Europe/Berlin", noon)
+        val start = ScheduleViewModel.defaultStart("Europe/Berlin", noon)
         // 12:30 UTC is 14:30 in Berlin (summer time), so the next full hour
         // is 15:00 there.
         assertEquals("2026-10-21 15:00", start)
@@ -39,7 +40,7 @@ class ScheduleStartTest {
 
     @Test
     fun `the start is always a full hour in the future`() {
-        val start = ScheduleActivity.defaultStart("UTC", noon)
+        val start = ScheduleViewModel.defaultStart("UTC", noon)
         assertTrue(start > "2026-10-21 12:00")
     }
 }

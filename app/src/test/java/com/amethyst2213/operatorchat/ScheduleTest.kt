@@ -1,6 +1,6 @@
 package com.amethyst2213.operatorchat
 
-import com.amethyst2213.operatorchat.ui.screens.formatCountdown
+import com.amethyst2213.operatorchat.ui.schedule.formatCountdown
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

@@ -14,8 +14,8 @@ android {
         applicationId = "com.amethyst2213.operatorchat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 68
-        versionName = "3.6"
+        versionCode = 70
+        versionName = "4.0"
 
         // Release uses the strict HTTPS-only network config; debug allows the
         // dev server cleartext carve-out.
@@ -48,6 +48,7 @@ android {
     buildFeatures {
         viewBinding = true
         compose = true
+        buildConfig = true
     }
 
     testOptions {

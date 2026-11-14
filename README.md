@@ -24,14 +24,36 @@ release build):
 
 Requires JDK 17 + Android SDK 35 (the CI provides both).
 
+## v4 architecture
+
+- **One activity** (`MainActivity`) and one Compose tree: four tabs
+  (Chats, Live, Shows, Settings) and a conversation route. No activity per
+  screen, no duplicate session.
+- `AppViewModel` is the session spine (stored connection, lock, update
+  offer). `InboxViewModel`, `ThreadViewModel`, `LiveViewModel`,
+  `ScheduleViewModel` and `SettingsViewModel` own their screens; the transport
+  (`ChatBridge`, `LiveToolsBridge`, `LiveApi`) and the crypto/verification
+  (`SecurePrefs`, `Passcode`, `Updater`) are unchanged contracts.
+- The design is the "studio" system: ink/ivory, amber actions, amethyst
+  secondary (see `ui/theme/StudioTheme.kt` and `ui/components`).
+- The broadcast still runs in `live/LiveBroadcastService` (foreground,
+  camera/microphone/dataSync types) so it survives the screen; the Live tab
+  only opens the camera when the operator presses Go live.
+- The web/UI tests are Robolectric + Compose (`ScreenshotTest` renders every
+  screen to `app/build/screenshots/`).
+
 ## Use
-1. Open the app.
-2. Enter the server URL: `https://amethyst2213.com/gallery`
-3. Enter an **operator token** (create one on the admin Chat page →
-   Operator tokens) or the legacy `GALLERY_CHAT_KEY`.
-4. The inbox loads; open a conversation and reply. The background service
-   notifies you of new member messages; offline replies queue and send
-   automatically.
+1. Open the app and enter the server URL: `https://amethyst2213.com/gallery`.
+2. Enter a **per-device operator token** (admin panel → Operator app). A
+   device token is required to start a broadcast; the legacy shared key can
+   still read/reply to chat during migration.
+3. Chats loads the unread queue; All/Favourites switch the list. Open a
+   conversation to reply, attach media, pin or delete messages.
+4. Live opens the camera only when you press Go live; the chat and the
+   broadcast keep running in the background, with a notification for new
+   live-chat messages.
+5. Shows schedules the next countdown; Settings holds the connection,
+   notifications, quiet hours, passcode/biometric lock and updates.
 
 The app is signature- and checksum-verified on in-app updates; the shared key
 is accepted only for backward compatibility and is being retired.
