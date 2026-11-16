@@ -146,6 +146,39 @@ object LiveApi {
             }
         }
 
+    /** One immediate read of the live chat since an id. */
+    data class ChatPoll(val messages: List<LiveChatMessage>, val latestId: Long)
+
+    suspend fun chatPoll(base: String, token: String, since: Long): ChatPoll? =
+        withContext(Dispatchers.IO) {
+            try {
+                val req = Request.Builder()
+                    .url(base.trimEnd('/') + "/live/chat/poll?since=$since")
+                    .header("Authorization", "Bearer $token")
+                    .get()
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@withContext null
+                    val json = JSONObject(resp.body?.string().orEmpty())
+                    if (!json.optBoolean("ok", false)) return@withContext null
+                    val arr = json.optJSONArray("messages") ?: JSONArray()
+                    val messages = (0 until arr.length()).map { i ->
+                        val m = arr.getJSONObject(i)
+                        LiveChatMessage(
+                            id = m.optLong("id", 0),
+                            senderRole = m.optString("sender_role", "user"),
+                            name = m.optString("name", "member"),
+                            message = m.optString("message", ""),
+                            createdAt = m.optString("created_at", ""),
+                        )
+                    }
+                    ChatPoll(messages, json.optLong("latestId", 0))
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
     /** POST /live/chat/send (form message). */
     suspend fun sendChat(base: String, token: String, message: String): Boolean =
         withContext(Dispatchers.IO) {

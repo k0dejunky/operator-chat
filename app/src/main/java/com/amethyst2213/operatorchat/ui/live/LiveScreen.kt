@@ -39,6 +39,7 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -54,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,13 +82,18 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
     val lifecycle = LocalLifecycleOwner.current
     var pendingGo by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
+    var composerFocused by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     // With the keyboard open there is no room for a 16:9 preview, a control
     // row and the chat on a phone: the chat and the composer used to end up
-    // underneath the keyboard. The keyboard collapses the preview; focus
-    // alone must NOT keep it collapsed (the field keeps focus after the IME
-    // closes, which hid the Go live/Stop controls).
-    val compact = rememberKeyboardOpen()
+    // underneath the keyboard. Focusing the composer collapses the preview
+    // (reliable on every device, even when the window is not resized); the
+    // height check covers a hardware keyboard. The top bar offers
+    // "Show preview" while collapsed, so the controls are never unreachable.
+    val keyboardOpen = rememberKeyboardOpen()
+    val compact = composerFocused || keyboardOpen
 
     val cameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
         PackageManager.PERMISSION_GRANTED
@@ -136,7 +143,25 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
                 is BroadcastState.Stopped -> "Stopped"
                 else -> "Not live"
             },
-            actions = { if (state.state is BroadcastState.Live) LivePill() },
+            actions = {
+                if (compact) {
+                    if (state.state.isLive) {
+                        IconAction(Icons.Outlined.Stop, "Stop broadcast", { vm.stop() }, tint = Studio.Coral)
+                    }
+                    IconAction(
+                        Icons.Outlined.Visibility,
+                        "Show preview",
+                        {
+                            composerFocused = false
+                            focusManager.clearFocus()
+                            keyboard?.hide()
+                        },
+                        tint = Studio.Ivory,
+                    )
+                } else if (state.state is BroadcastState.Live) {
+                    LivePill()
+                }
+            },
         )
 
         Column(
@@ -348,7 +373,9 @@ fun LiveScreen(vm: LiveViewModel, state: LiveViewModel.Ui) {
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { if (it.length <= 500) draft = it },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .onFocusChanged { composerFocused = it.isFocused },
                     placeholder = {
                         Text(
                             if (state.state.isLive) "Message the viewers…" else "Go live to chat",

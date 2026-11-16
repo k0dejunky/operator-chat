@@ -326,7 +326,7 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(chatError = "The message could not be sent — is the stream live?")
             } else {
                 _ui.value = _ui.value.copy(chatError = null)
-                readChatOnce()
+                pollChatOnce()
             }
         }
     }
@@ -335,8 +335,8 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
         if (chatJob?.isActive != true) {
             chatJob = viewModelScope.launch {
                 while (true) {
-                    readChatOnce()
-                    delay(4000)
+                    pollChatOnce()
+                    delay(1000)
                 }
             }
         }
@@ -360,13 +360,18 @@ class LiveViewModel(app: Application) : AndroidViewModel(app) {
         statsJob = null
     }
 
-    private suspend fun readChatOnce() {
-        val fresh = withContext(Dispatchers.IO) { LiveApi.chatOnce(base, token, lastChatId) }
-        if (fresh.isEmpty()) return
+    /**
+     * One immediate poll. The SSE endpoint holds a ~5 s window, and with the
+     * pause between windows a member message took up to ~9 s to appear; the
+     * JSON poll returns at once and the loop runs every second.
+     */
+    private suspend fun pollChatOnce() {
+        val poll = LiveApi.chatPoll(base, token, lastChatId) ?: return
         val seen = _ui.value.chat.map { it.id }.toSet()
-        val added = fresh.filter { it.id > lastChatId && !seen.contains(it.id) }
+        val added = poll.messages
+            .filter { it.id > lastChatId && !seen.contains(it.id) }
             .sortedBy { it.id }
-        lastChatId = maxOf(lastChatId, fresh.maxOf { it.id })
+        lastChatId = maxOf(lastChatId, poll.latestId, poll.messages.maxOfOrNull { it.id } ?: 0L)
         if (added.isNotEmpty()) {
             val merged = (_ui.value.chat + added).distinctBy { it.id }.takeLast(150)
             _ui.value = _ui.value.copy(chat = merged, chatError = null)
