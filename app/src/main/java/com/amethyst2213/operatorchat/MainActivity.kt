@@ -11,13 +11,17 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricPrompt
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -76,11 +80,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, true)
-        @Suppress("DEPRECATION")
-        window.statusBarColor = android.graphics.Color.parseColor("#0B0B10")
-        @Suppress("DEPRECATION")
-        window.navigationBarColor = android.graphics.Color.parseColor("#0B0B10")
+        // Android 15+ enforces edge-to-edge for apps targeting 35+, so the
+        // old "let the decor fit the system windows" call is ignored there
+        // and the content would slide under the status and navigation bars.
+        // Use the real edge-to-edge path on 15+, keep the pre-15 behaviour
+        // (where the window itself insets the content) untouched.
+        if (Build.VERSION.SDK_INT >= 35) {
+            enableEdgeToEdge()
+        } else {
+            WindowCompat.setDecorFitsSystemWindows(window, true)
+            @Suppress("DEPRECATION")
+            window.statusBarColor = android.graphics.Color.parseColor("#0B0B10")
+            @Suppress("DEPRECATION")
+            window.navigationBarColor = android.graphics.Color.parseColor("#0B0B10")
+        }
 
         handleIntent(intent)
 
@@ -111,42 +124,54 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
 
-                when {
-                    !state.signedIn -> LoginScreen(
-                        initialUrl = state.url,
-                        initialToken = state.token,
-                        busy = state.busy,
-                        error = state.error,
-                        update = state.update,
-                        onConnect = { url, token -> appVm.connect(url, token) },
-                        onInstallUpdate = { appVm.installUpdate() },
-                        onDismissUpdate = { appVm.dismissUpdate() },
-                    )
-                    state.locked -> LockScreen(
-                        error = state.error,
-                        biometricAvailable = state.biometricAvailable,
-                        passcodeSet = state.passcodeSet,
-                        onUnlockPin = { appVm.unlockWithPin(it) },
-                        onBiometric = { promptBiometric() },
-                        onForgot = { appVm.signOut(wipePasscode = true) },
-                    )
-                    else -> StudioRoot(
-                        appVm = appVm,
-                        state = state,
-                        tab = tab,
-                        onTab = { tab = it },
-                        threadId = threadId,
-                        threadName = threadName,
-                        threadMode = threadMode,
-                        threadReplies = threadReplies,
-                        onOpenThread = { id, name, mode, replies ->
-                            threadId = id
-                            threadName = name
-                            threadMode = mode
-                            threadReplies = replies
-                        },
-                        onCloseThread = { threadId = 0L },
-                    )
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (Build.VERSION.SDK_INT >= 35) {
+                                Modifier.statusBarsPadding().navigationBarsPadding()
+                            } else {
+                                Modifier
+                            }
+                        )
+                ) {
+                    when {
+                        !state.signedIn -> LoginScreen(
+                            initialUrl = state.url,
+                            initialToken = state.token,
+                            busy = state.busy,
+                            error = state.error,
+                            update = state.update,
+                            onConnect = { url, token -> appVm.connect(url, token) },
+                            onInstallUpdate = { appVm.installUpdate() },
+                            onDismissUpdate = { appVm.dismissUpdate() },
+                        )
+                        state.locked -> LockScreen(
+                            error = state.error,
+                            biometricAvailable = state.biometricAvailable,
+                            passcodeSet = state.passcodeSet,
+                            onUnlockPin = { appVm.unlockWithPin(it) },
+                            onBiometric = { promptBiometric() },
+                            onForgot = { appVm.signOut(wipePasscode = true) },
+                        )
+                        else -> StudioRoot(
+                            appVm = appVm,
+                            state = state,
+                            tab = tab,
+                            onTab = { tab = it },
+                            threadId = threadId,
+                            threadName = threadName,
+                            threadMode = threadMode,
+                            threadReplies = threadReplies,
+                            onOpenThread = { id, name, mode, replies ->
+                                threadId = id
+                                threadName = name
+                                threadMode = mode
+                                threadReplies = replies
+                            },
+                            onCloseThread = { threadId = 0L },
+                        )
+                    }
                 }
             }
         }
@@ -228,6 +253,10 @@ private fun StudioRoot(
 
     Scaffold(
         containerColor = Studio.Ink,
+        // The activity already applies the status/navigation bar padding on
+        // Android 15+ (and the window does it on older versions). Letting
+        // Scaffold add the system-bar insets as well would double-pad.
+        contentWindowInsets = WindowInsets(0),
         bottomBar = { StudioBottomBar(tab, onTab) },
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {

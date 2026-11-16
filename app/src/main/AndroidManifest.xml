@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- The chat poller keeps a message connection open all day. It is a
+         remoteMessaging service, not dataSync: Android 15 caps dataSync
+         services at six hours per 24 hours, which would kill the operator's
+         notifications every day. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <!-- The live broadcast runs in a foreground service so it survives the
          operator switching apps or the screen locking. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
@@ -50,7 +55,7 @@
         <service
             android:name=".ChatPollService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="remoteMessaging" />
 
         <!-- The broadcast service: it owns the camera, the encoder and the
              RTMP connection, so the stream survives the Activity. -->

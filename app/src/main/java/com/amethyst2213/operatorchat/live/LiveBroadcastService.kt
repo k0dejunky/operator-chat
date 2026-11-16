@@ -1,6 +1,7 @@
 package com.amethyst2213.operatorchat.live
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -218,6 +219,20 @@ class LiveBroadcastService : Service() {
         if (instance === this) instance = null
         if (_ready.value === this) _ready.value = null
         super.onDestroy()
+    }
+
+    /**
+     * Android 15+ calls this when the dataSync foreground-service quota is
+     * exhausted. A broadcast that has run for six hours in one day is the
+     * only way to get here; stop it cleanly rather than let the system kill
+     * the process while the camera is still open.
+     */
+    @SuppressLint("NewApi")
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "live foreground service timed out (type=$fgsType); stopping the broadcast")
+        stopEverything()
+        stopChatWatcher()
+        stopSelf()
     }
 
     /**

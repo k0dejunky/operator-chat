@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Debug build only: allows cleartext to the local dev server. -->
-    <base-config cleartextTrafficPermitted="false" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">192.168.1.110</domain>
-    </domain-config>
+    <!-- Debug build only: allow cleartext to the local dev server.
+
+         Do NOT use a <domain-config> here. Any per-domain configuration
+         makes Android's RootTrustManager require the hostname-aware
+         checkServerTrusted(chain, authType, hostname) overload, and
+         RootEncoder's ktor TLS client (used for RTMPS) only implements the
+         two-argument one - so an RTMPS publish from a debug build would fail
+         with "Domain specific configurations require that hostname aware
+         checkServerTrusted...". The release config has no domain-config and
+         is HTTPS-only. -->
+    <base-config cleartextTrafficPermitted="true" />
 </network-security-config>

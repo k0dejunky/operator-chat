@@ -8,14 +8,14 @@ plugins {
 
 android {
     namespace = "com.amethyst2213.operatorchat"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.amethyst2213.operatorchat"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 72
-        versionName = "4.2"
+        targetSdk = 36
+        versionCode = 73
+        versionName = "4.3"
 
         // Release uses the strict HTTPS-only network config; debug allows the
         // dev server cleartext carve-out.
@@ -86,7 +86,12 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     // Live video broadcast (operator -> MediaMTX via RTMP).
     implementation("com.github.pedroSG94.RootEncoder:library:2.6.1")
-    implementation("com.github.pedroSG94.RootEncoder:extra-sources:2.6.1")
+    // NOTE: do not add RootEncoder's "extra-sources" artifact. It pulls in
+    // com.herohan:UVCAndroid, whose native libraries are still 4 KB-aligned
+    // (libUVCCamera, libuvc, libusb1.0, libjpeg-turbo, libyuv), and Google
+    // Play rejects apps targeting Android 15+ that are not 16 KB-compatible.
+    // The app only uses Camera2Source/MicrophoneSource/RtmpStream, all of
+    // which live in the "library" artifact.
     // The operator app was rebuilt on Jetpack Compose for v3.0: the XML
     // layouts could not express the operator dashboards (per-chat controls,
     // the live console, the schedule screen) without turning into a wall of
@@ -112,7 +117,7 @@ dependencies {
     // Robolectric renders the real Compose tree, so the screen can be
     // measured (the reply field used to measure ZERO width, which is why
     // no reply could be typed) and screenshotted.
-    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("org.robolectric:robolectric:4.16.1")
     testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("androidx.test:core:1.6.1")

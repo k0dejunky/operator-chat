@@ -1,9 +1,11 @@
 package com.amethyst2213.operatorchat
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
@@ -11,6 +13,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,8 +52,41 @@ class ChatPollService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Promote the service as a remoteMessaging service.
+     *
+     * The manifest declares the type, but naming it here as well keeps the
+     * intent explicit and lets the two-argument startForeground() fallback
+     * work on Android 13 and older. Android 15's six-hour dataSync quota
+     * does not apply to remoteMessaging.
+     */
+    private fun startForegroundCompat() {
+        val notification = buildNotification("Operator chat running")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceCompat.startForeground(
+                this,
+                NOTIF_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING,
+            )
+        } else {
+            startForeground(NOTIF_ID, notification)
+        }
+    }
+
+    /**
+     * Android 15+ calls this when a foreground-service quota is exhausted.
+     * Stop cleanly instead of letting the system kill the process; the next
+     * app start brings the poller back.
+     */
+    @SuppressLint("NewApi")
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIF_ID, buildNotification("Operator chat running"))
+        startForegroundCompat()
         val prefs = getSharedPreferences("operator_chat", MODE_PRIVATE)
         val url = SecurePrefs.url(this).trim().trimEnd('/')
         val token = SecurePrefs.token(this).trim()
