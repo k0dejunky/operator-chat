@@ -11,6 +11,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -86,7 +87,13 @@ class MainActivity : AppCompatActivity() {
         // Use the real edge-to-edge path on 15+, keep the pre-15 behaviour
         // (where the window itself insets the content) untouched.
         if (Build.VERSION.SDK_INT >= 35) {
-            enableEdgeToEdge()
+            // The app is always dark. SystemBarStyle.auto() follows the
+            // SYSTEM theme, so a phone in light mode would get dark status
+            // bar icons on our dark background. Pin light icons instead.
+            enableEdgeToEdge(
+                statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+                navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            )
         } else {
             WindowCompat.setDecorFitsSystemWindows(window, true)
             @Suppress("DEPRECATION")
